@@ -1,4 +1,4 @@
-FROM php:8.4-fpm
+FROM php:8.4-cli
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -10,20 +10,45 @@ RUN apt-get update && apt-get install -y \
     libzip-dev \
     zip \
     unzip \
-    && docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip
+    && docker-php-ext-install \
+    pdo_mysql \
+    mbstring \
+    exif \
+    pcntl \
+    bcmath \
+    gd \
+    zip \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Composer (copied from the official composer image)
+# Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www
 
-COPY . /var/www
+# Copy Laravel application
+COPY . .
 
-# Install PHP dependencies (skipped gracefully on first build if composer.json isn't there yet)
-RUN composer install --no-interaction --optimize-autoloader --no-dev || true
+# Install PHP dependencies
+RUN composer install \
+    --no-interaction \
+    --prefer-dist \
+    --optimize-autoloader \
+    --no-dev
 
-RUN chown -R www-data:www-data /var/www \
-    && chmod -R 755 /var/www/storage
+# Laravel permissions
+RUN mkdir -p \
+    storage/framework/cache \
+    storage/framework/sessions \
+    storage/framework/views \
+    bootstrap/cache \
+    && chown -R www-data:www-data storage bootstrap/cache \
+    && chmod -R 775 storage bootstrap/cache
 
-EXPOSE 9000
-CMD ["php-fpm"]
+# Laravel production caches
+RUN php artisan config:clear \
+    && php artisan route:clear \
+    && php artisan view:clear
+
+EXPOSE 10000
+
+CMD php artisan serve --host=0.0.0.0 --port=${PORT:-10000}
