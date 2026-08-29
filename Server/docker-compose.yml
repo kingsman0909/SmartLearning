@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: problearn-app
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - ./:/var/www
+    networks:
+      - problearn-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: problearn-nginx
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    volumes:
+      - ./:/var/www
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - app
+    networks:
+      - problearn-network
+
+  mysql:
+    image: mysql:8.0
+    container_name: problearn-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: problearn
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: problearn
+      MYSQL_PASSWORD: password
+    ports:
+      - "3307:3306"
+    volumes:
+      - problearn-mysql-data:/var/lib/mysql
+    networks:
+      - problearn-network
+
+networks:
+  problearn-network:
+    driver: bridge
+
+volumes:
+  problearn-mysql-data:
+    driver: local
