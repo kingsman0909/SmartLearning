@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import '../../styles/Login.css'
-const Login = () => {
+const Login = (props) => {
   const navigate = useNavigate();
 
   const [formData, setFormData] = useState({
@@ -31,6 +31,7 @@ const Login = () => {
   return (
     <div className="login-modal">
       <form onSubmit={handleLogin}>
+        <span onClick={()=>props.setLogin(false)}>X</span>
         <h1>Login</h1>
 
         <input
