@@ -1,0 +1,18 @@
+.login-modal{
+    width: 350px;
+    min-width: 150px;
+    height: 450px;
+    min-height: 250px;
+    background: rgb(160, 159, 159);
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    border-radius: 8px;
+
+    form{
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+}
