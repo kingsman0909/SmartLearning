@@ -53,3 +53,13 @@
 .landing-title{
     margin-top: 100px;
 }
+
+@media (max-width: 500px){
+    .landing-page{
+        padding-inline: 20px;
+                
+        .landing-btn button{
+            width: 100px;
+        }
+    }
+}
