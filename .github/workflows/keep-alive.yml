@@ -1,0 +1,18 @@
+name: ProbLearn Keep Alive
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Wake up ProbLearn
+        run: |
+          curl --fail --show-error \
+            --max-time 60 \
+            -w "\nHTTP STATUS: %{http_code}\n" \
+            "https://problearn.onrender.com/api/users"
