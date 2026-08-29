@@ -4,9 +4,11 @@ import '../styles/Landing.css';
 import DotGrid from './animatedComponents/Background';
 import Text from './animatedComponents/Text';
 import Login from './auth/login';
+import Signup from './auth/signup';
 
 const LandingPage = () => {
-  const [login, setLogin] = useState(true);
+  const [login, setLogin] = useState(false);
+  const [signup, setSignup] = useState(false);
 
   return (
     <div className='landing-page'>
@@ -49,10 +51,11 @@ const LandingPage = () => {
         Learn at your own pace and put your knowledge to the test.
       </p>
       <div className='landing-btn'>
-        <button className='landing-login'>Login</button>
-        <button className='landing-signup'>Sign-up</button>
+        <button className='landing-login' onClick={()=>setLogin(true)}>Login</button>
+        <button className='landing-signup' onClick={()=>setSignup(true)}>Sign-up</button>
       </div>
-      {login && <Login />}
+      {login && <Login setLogin={setLogin}/>}
+      {signup && <Signup setSignup={setSignup}/>}
     </div>
   )
 }
