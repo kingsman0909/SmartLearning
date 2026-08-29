@@ -10,9 +10,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Wake up ProbLearn
+      - name: Ping ProbLearn
         run: |
-          curl --fail --show-error \
-            --max-time 60 \
+          curl --max-time 60 \
             -w "\nHTTP STATUS: %{http_code}\n" \
-            "https://problearn.onrender.com/api/users"
+            "https://problearn.onrender.com/api/topics"
