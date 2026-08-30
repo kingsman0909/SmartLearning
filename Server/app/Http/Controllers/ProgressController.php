@@ -21,12 +21,17 @@ class ProgressController extends Controller
             ], 401);
         }
 
+        $score = (int) ($user->total_score ?? 0);
+
+        // Every 10 points = next level
+        $level = floor($score / 10) + 1;
+
         return response()->json([
             'success' => true,
 
             'data' => [
                 'score' =>
-                    (int) ($user->total_score ?? 0),
+                    $score,
 
                 'correct' =>
                     (int) ($user->questions_correct ?? 0),
@@ -46,8 +51,7 @@ class ProgressController extends Controller
                     (float) ($user->success_rate ?? 0),
 
                 'level' =>
-                    'Level ' .
-                    (int) ($user->level ?? 1),
+                    'Level ' . $level,
             ],
         ]);
     }
@@ -66,16 +70,20 @@ class ProgressController extends Controller
             ], 401);
         }
 
+        $score = (int) ($user->total_score ?? 0);
+
+        // Every 10 points = next level
+        $level = floor($score / 10) + 1;
+
         return response()->json([
             'success' => true,
 
             'data' => [
                 'score' =>
-                    (int) ($user->total_score ?? 0),
+                    $score,
 
                 'level' =>
-                    'Level ' .
-                    (int) ($user->level ?? 1),
+                    'Level ' . $level,
             ],
         ]);
     }
