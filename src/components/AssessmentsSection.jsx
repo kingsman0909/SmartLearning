@@ -2,7 +2,7 @@ import React from "react";
 import AssessmentDetail from "./AssessmentDetail";
 import "../styles/homepage.css";
 
-const PASSING_SCORE = 5;
+const PASSING_SCORE = 6;
 
 const AssessmentsSection = ({
   assessments,
@@ -60,7 +60,8 @@ const AssessmentsSection = ({
                   Number(assessment.score ?? 0);
 
                 const isPassed =
-                  status === "passed";
+                  status === "passed" ||
+                  assessment.locked === true;
 
                 const isFailed =
                   status === "failed";
@@ -79,18 +80,47 @@ const AssessmentsSection = ({
                       isPassed
                         ? "assessment-card-passed"
                         : ""
+                    } ${
+                      isPassed
+                        ? "assessment-card-locked"
+                        : ""
                     }`}
-                    onClick={() =>
+                    onClick={() => {
+                      /*
+                       * PASSED / LOCKED
+                       *
+                       * Do not open the assessment.
+                       *
+                       * startAssessment() also performs
+                       * another backend/frontend lock check.
+                       */
+
+                      if (
+                        assessment.locked === true ||
+                        assessment.status === "passed"
+                      ) {
+                        return;
+                      }
+
                       startAssessment(
                         assessment.id
-                      )
-                    }
+                      );
+                    }}
                   >
 
                     {/* TITLE */}
                     <h3>
                       {assessment.icon ?? "📝"}{" "}
                       {assessment.title}
+
+                      {isPassed && (
+                        <span
+                          className="assessment-lock-icon"
+                          title="Assessment locked"
+                        >
+                          {" "}🔒
+                        </span>
+                      )}
                     </h3>
 
                     {/* DESCRIPTION */}
@@ -112,9 +142,7 @@ const AssessmentsSection = ({
                       📝 {total} questions
                     </div>
 
-                    {/* ==========================
-                        STATUS
-                    =========================== */}
+                    {/* STATUS */}
 
                     {!isAttempted && (
                       <span className="status-tag pending">
@@ -124,7 +152,7 @@ const AssessmentsSection = ({
 
                     {isPassed && (
                       <span className="status-tag passed">
-                        ✅ Passed: {score}%
+                        🔒 Passed: {score}%
                       </span>
                     )}
 
@@ -134,9 +162,7 @@ const AssessmentsSection = ({
                       </span>
                     )}
 
-                    {/* ==========================
-                        PROGRESS
-                    =========================== */}
+                    {/* PROGRESS */}
 
                     {!isAttempted &&
                       progress > 0 &&
@@ -150,9 +176,7 @@ const AssessmentsSection = ({
                         </div>
                       )}
 
-                    {/* ==========================
-                        RETRY MESSAGE
-                    =========================== */}
+                    {/* RETRY */}
 
                     {isFailed && (
                       <div className="assessment-retry">
@@ -162,14 +186,12 @@ const AssessmentsSection = ({
                       </div>
                     )}
 
-                    {/* ==========================
-                        PASSED MESSAGE
-                    =========================== */}
+                    {/* LOCKED / COMPLETED */}
 
                     {isPassed && (
                       <div className="assessment-completed">
                         <span>
-                          🎉 Assessment completed!
+                          🔒 Assessment completed and locked.
                         </span>
                       </div>
                     )}

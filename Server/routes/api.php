@@ -6,14 +6,11 @@ use App\Http\Controllers\TopicController;
 use App\Http\Controllers\QuestionController;
 use App\Http\Controllers\AssessmentController;
 use App\Http\Controllers\ProgressController;
-
 // ============================================================
 // PUBLIC
 // ============================================================
 
 Route::post('/login', [AuthController::class, 'login']);
-//SIGN UP USER
-
 Route::post('/register', [AuthController::class, 'register']);
 
 Route::get('/topics', [TopicController::class, 'index']);
@@ -21,9 +18,6 @@ Route::get('/topics/{topic}', [TopicController::class, 'show']);
 
 Route::get('/questions/practice', [QuestionController::class, 'practice']);
 Route::get('/questions/flashcards', [QuestionController::class, 'flashcards']);
-
-Route::get('/assessments', [AssessmentController::class, 'index']);
-Route::get('/assessments/{assessment}', [AssessmentController::class, 'show']);
 
 
 // ============================================================
@@ -33,7 +27,7 @@ Route::get('/assessments/{assessment}', [AssessmentController::class, 'show']);
 Route::middleware('auth:sanctum')->group(function () {
 
     // --------------------------------------------------------
-    // CHECK CURRENT USER / TOKEN
+    // USER
     // --------------------------------------------------------
 
     Route::get('/user', function (\Illuminate\Http\Request $request) {
@@ -42,15 +36,11 @@ Route::middleware('auth:sanctum')->group(function () {
         ]);
     });
 
-    
-
-
     // --------------------------------------------------------
     // LOGOUT
     // --------------------------------------------------------
 
     Route::post('/logout', [AuthController::class, 'logout']);
-
 
     // --------------------------------------------------------
     // PRACTICE
@@ -61,7 +51,6 @@ Route::middleware('auth:sanctum')->group(function () {
         [QuestionController::class, 'practiceAnswer']
     );
 
-
     // --------------------------------------------------------
     // FLASHCARDS
     // --------------------------------------------------------
@@ -71,16 +60,24 @@ Route::middleware('auth:sanctum')->group(function () {
         [QuestionController::class, 'flashcardAnswer']
     );
 
-
     // --------------------------------------------------------
     // ASSESSMENTS
     // --------------------------------------------------------
+
+    Route::get(
+        '/assessments',
+        [AssessmentController::class, 'index']
+    );
+
+    Route::get(
+        '/assessments/{assessment}',
+        [AssessmentController::class, 'show']
+    );
 
     Route::post(
         '/assessments/{assessment}/submit',
         [AssessmentController::class, 'submit']
     );
-
 
     // --------------------------------------------------------
     // PROGRESS

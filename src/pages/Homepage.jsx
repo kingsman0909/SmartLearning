@@ -1,7 +1,4 @@
-import React, {
-  useEffect,
-  useState,
-} from "react";
+import React, { useEffect, useState } from "react";
 
 import "../styles/homepage.css";
 
@@ -23,61 +20,41 @@ const API_URL =
   import.meta.env.VITE_API_BASE_URL ||
   "http://127.0.0.1:8000/api";
 
-const LETTERS = [
-  "A",
-  "B",
-  "C",
-  "D",
-];
+const LETTERS = ["A", "B", "C", "D"];
 
 const FLASHCARD_STORAGE_KEY =
   "problearn_flashcards_progress";
 
-// Passing rule:
-// 5/10 and above = PASS
-// 4/10 and below = FAIL
-const PASSING_SCORE = 50;
+const PASSING_SCORE = 60;
 
 // ============================================================
 // API
 // ============================================================
 
-const apiFetch = async (
-  endpoint,
-  options = {}
-) => {
-  const token =
-    localStorage.getItem("token");
+const apiFetch = async (endpoint, options = {}) => {
+  const token = localStorage.getItem("token");
 
-  const response = await fetch(
-    `${API_URL}${endpoint}`,
-    {
-      ...options,
+  const response = await fetch(`${API_URL}${endpoint}`, {
+    ...options,
 
-      headers: {
-        Accept:
-          "application/json",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
 
-        "Content-Type":
-          "application/json",
+      ...(token
+        ? {
+            Authorization: `Bearer ${token}`,
+          }
+        : {}),
 
-        ...(token
-          ? {
-              Authorization:
-                `Bearer ${token}`,
-            }
-          : {}),
-
-        ...(options.headers || {}),
-      },
-    }
-  );
+      ...(options.headers || {}),
+    },
+  });
 
   let data = null;
 
   try {
-    data =
-      await response.json();
+    data = await response.json();
   } catch {
     data = null;
   }
@@ -97,9 +74,7 @@ const apiFetch = async (
 // USER NORMALIZER
 // ============================================================
 
-const normalizeUser = (
-  response
-) => {
+const normalizeUser = (response) => {
   if (!response) {
     return null;
   }
@@ -111,22 +86,15 @@ const normalizeUser = (
     response,
   ];
 
-  const found =
-    candidates.find(
-      (item) =>
-        item &&
-        typeof item ===
-          "object" &&
-        !Array.isArray(item) &&
-        (
-          item.username !==
-            undefined ||
-          item.alias !==
-            undefined ||
-          item.id !==
-            undefined
-        )
-    );
+  const found = candidates.find(
+    (item) =>
+      item &&
+      typeof item === "object" &&
+      !Array.isArray(item) &&
+      (item.username !== undefined ||
+        item.alias !== undefined ||
+        item.id !== undefined)
+  );
 
   if (!found) {
     return null;
@@ -151,22 +119,15 @@ const normalizeUser = (
 // QUESTION NORMALIZER
 // ============================================================
 
-const normalizeQuestion = (
-  question
-) => {
+const normalizeQuestion = (question) => {
   if (!question) {
     return null;
   }
 
   let options = [];
 
-  if (
-    Array.isArray(
-      question.options
-    )
-  ) {
-    options =
-      question.options;
+  if (Array.isArray(question.options)) {
+    options = question.options;
   } else {
     options = [
       question.choice_a,
@@ -190,9 +151,7 @@ const normalizeQuestion = (
 // POINTS
 // ============================================================
 
-const getEarnedPoints = (
-  data
-) => {
+const getEarnedPoints = (data) => {
   return (
     Number(
       data?.score_earned ??
@@ -207,10 +166,7 @@ const getEarnedPoints = (
 // CORRECT ANSWER
 // ============================================================
 
-const getCorrectAnswer = (
-  result,
-  question
-) => {
+const getCorrectAnswer = (result, question) => {
   return (
     result?.correct_answer ??
     result?.correctAnswer ??
@@ -222,14 +178,11 @@ const getCorrectAnswer = (
 };
 
 // ============================================================
-// STATS
+// STATS NORMALIZER
 // ============================================================
 
-const normalizeStats = (
-  data
-) => {
-  const stats =
-    data || {};
+const normalizeStats = (data) => {
+  const stats = data || {};
 
   const score =
     Number(
@@ -272,28 +225,16 @@ const normalizeStats = (
   }
 
   if (
-    typeof level ===
-      "string" &&
-    !level
-      .toLowerCase()
-      .startsWith("level")
+    typeof level === "string" &&
+    !level.toLowerCase().startsWith("level")
   ) {
-    if (
-      !isNaN(
-        Number(level)
-      )
-    ) {
-      level =
-        `Level ${level}`;
+    if (!isNaN(Number(level))) {
+      level = `Level ${level}`;
     }
   }
 
-  if (
-    typeof level ===
-    "number"
-  ) {
-    level =
-      `Level ${level}`;
+  if (typeof level === "number") {
+    level = `Level ${level}`;
   }
 
   return {
@@ -302,8 +243,7 @@ const normalizeStats = (
 
     wrong: Math.max(
       0,
-      totalAnswered -
-        correct
+      totalAnswered - correct
     ),
 
     totalAnswered,
@@ -318,149 +258,122 @@ const normalizeStats = (
 // ASSESSMENT NORMALIZER
 // ============================================================
 
-const normalizeAssessment =
-  (assessment) => {
-    if (!assessment) {
-      return null;
-    }
+const normalizeAssessment = (assessment) => {
+  if (!assessment) {
+    return null;
+  }
 
-    const questions =
-      Array.isArray(
-        assessment.questions
-      )
-        ? assessment.questions
-            .map(
-              normalizeQuestion
-            )
-            .filter(Boolean)
-        : [];
+  const questions =
+    Array.isArray(assessment.questions)
+      ? assessment.questions
+          .map(normalizeQuestion)
+          .filter(Boolean)
+      : [];
 
-    let correct = Number(
-      assessment.correct ??
-        assessment.questions_correct ??
-        0
-    );
+  let correct = Number(
+    assessment.correct ??
+      assessment.questions_correct ??
+      0
+  );
 
-    if (
-      !Number.isFinite(
-        correct
-      )
-    ) {
-      correct = 0;
-    }
+  if (!Number.isFinite(correct)) {
+    correct = 0;
+  }
 
-    let total =
-      Number(
-        assessment.total ??
-          assessment.question_count ??
-          questions.length
-      );
+  let total = Number(
+    assessment.total ??
+      assessment.question_count ??
+      questions.length
+  );
 
-    if (
-      !Number.isFinite(
-        total
-      ) ||
-      total < 0
-    ) {
-      total =
-        questions.length;
-    }
+  if (!Number.isFinite(total) || total < 0) {
+    total = questions.length;
+  }
 
-    let score = Number(
-      assessment.score ??
-        assessment.percentage ??
-        0
-    );
+  let score = Number(
+    assessment.score ??
+      assessment.percentage ??
+      0
+  );
 
-    if (
-      !Number.isFinite(
-        score
-      )
-    ) {
-      score = 0;
-    }
+  if (!Number.isFinite(score)) {
+    score = 0;
+  }
 
-    let status =
-      assessment.status ??
-      null;
+  let status =
+    assessment.status ??
+    null;
 
-    /*
-      If backend already gives a status,
-      preserve it.
+  /*
+   * Backend can explicitly return:
+   *
+   * locked: true
+   * status: "passed"
+   *
+   * If locked is true, always treat it as passed/locked.
+   */
 
-      Otherwise derive it from score.
-    */
-    if (
-      !status &&
-      assessment.attempted
-    ) {
-      status =
-        score >=
-        PASSING_SCORE
-          ? "passed"
-          : "failed";
-    }
+  const locked =
+    assessment.locked === true ||
+    status === "passed";
 
-    return {
-      ...assessment,
+  if (!status && assessment.attempted) {
+    status =
+      score >= PASSING_SCORE
+        ? "passed"
+        : "failed";
+  }
 
-      questions,
+  return {
+    ...assessment,
 
-      correct,
+    questions,
 
-      total,
+    correct,
 
-      score,
+    total,
 
-      status,
-    };
+    score,
+
+    status,
+
+    locked,
   };
+};
 
 // ============================================================
 // FLASHCARD STORAGE
 // ============================================================
 
-const getSavedFlashcardProgress =
-  () => {
-    try {
-      const saved =
-        localStorage.getItem(
-          FLASHCARD_STORAGE_KEY
-        );
+const getSavedFlashcardProgress = () => {
+  try {
+    const saved = localStorage.getItem(
+      FLASHCARD_STORAGE_KEY
+    );
 
-      if (!saved) {
-        return {
-          answered: {},
-          results: {},
-          index: 0,
-        };
-      }
-
-      const parsed =
-        JSON.parse(saved);
-
-      return {
-        answered:
-          parsed?.answered ||
-          {},
-
-        results:
-          parsed?.results ||
-          {},
-
-        index:
-          Number(
-            parsed?.index
-          ) || 0,
-      };
-    } catch {
+    if (!saved) {
       return {
         answered: {},
         results: {},
         index: 0,
       };
     }
-  };
+
+    const parsed = JSON.parse(saved);
+
+    return {
+      answered: parsed?.answered || {},
+      results: parsed?.results || {},
+      index: Number(parsed?.index) || 0,
+    };
+  } catch {
+    return {
+      answered: {},
+      results: {},
+      index: 0,
+    };
+  }
+};
 
 const saveFlashcardProgress = ({
   answered,
@@ -489,7 +402,6 @@ const saveFlashcardProgress = ({
 // ============================================================
 
 const Homepage = () => {
-
   // ==========================================================
   // SECTION
   // ==========================================================
@@ -503,10 +415,7 @@ const Homepage = () => {
   // USER
   // ==========================================================
 
-  const [
-    user,
-    setUser,
-  ] = useState(null);
+  const [user, setUser] = useState(null);
 
   const [
     showProfile,
@@ -527,10 +436,7 @@ const Homepage = () => {
   // DATA
   // ==========================================================
 
-  const [
-    topics,
-    setTopics,
-  ] = useState([]);
+  const [topics, setTopics] = useState([]);
 
   const [
     practiceProblems,
@@ -567,15 +473,9 @@ const Homepage = () => {
   // LOADING
   // ==========================================================
 
-  const [
-    loading,
-    setLoading,
-  ] = useState(true);
+  const [loading, setLoading] = useState(true);
 
-  const [
-    error,
-    setError,
-  ] = useState(null);
+  const [error, setError] = useState(null);
 
   // ==========================================================
   // PRACTICE
@@ -615,10 +515,7 @@ const Homepage = () => {
   // FLASHCARDS
   // ==========================================================
 
-  const [
-    flashIndex,
-    setFlashIndex,
-  ] = useState(0);
+  const [flashIndex, setFlashIndex] = useState(0);
 
   const [
     flashFlipped,
@@ -668,15 +565,9 @@ const Homepage = () => {
   // RESULT / TOAST
   // ==========================================================
 
-  const [
-    result,
-    setResult,
-  ] = useState(null);
+  const [result, setResult] = useState(null);
 
-  const [
-    toast,
-    setToast,
-  ] = useState(null);
+  const [toast, setToast] = useState(null);
 
   // ==========================================================
   // TOAST
@@ -702,25 +593,16 @@ const Homepage = () => {
 
   const launchConfetti = () => {
     const container =
-      document.createElement(
-        "div"
-      );
+      document.createElement("div");
 
     container.className =
       "confetti-container";
 
-    for (
-      let i = 0;
-      i < 40;
-      i++
-    ) {
+    for (let i = 0; i < 40; i++) {
       const piece =
-        document.createElement(
-          "div"
-        );
+        document.createElement("div");
 
-      piece.className =
-        "confetti";
+      piece.className = "confetti";
 
       piece.style.left =
         `${Math.random() * 100}%`;
@@ -728,14 +610,10 @@ const Homepage = () => {
       piece.style.animationDelay =
         `${Math.random() * 0.5}s`;
 
-      container.appendChild(
-        piece
-      );
+      container.appendChild(piece);
     }
 
-    document.body.appendChild(
-      container
-    );
+    document.body.appendChild(container);
 
     setTimeout(() => {
       container.remove();
@@ -743,273 +621,272 @@ const Homepage = () => {
   };
 
   // ==========================================================
+  // REFRESH PROGRESS
+  // ==========================================================
+  //
+  // IMPORTANT:
+  //
+  // We fetch /progress again after answering.
+  //
+  // This prevents the frontend from staying at
+  // "Level 1" until the user manually refreshes.
+  //
+  // ==========================================================
+
+  const refreshProgress = async () => {
+    try {
+      const response =
+        await apiFetch("/progress");
+
+      const progressData =
+        response?.data ??
+        response ??
+        {};
+
+      const normalized =
+        normalizeStats(
+          progressData
+        );
+
+      setUserStats(normalized);
+
+      return normalized;
+    } catch (err) {
+      console.error(
+        "Unable to refresh progress:",
+        err
+      );
+
+      return null;
+    }
+  };
+
+  // ==========================================================
   // LOAD HOMEPAGE DATA
   // ==========================================================
 
-  const loadHomepageData =
-    async () => {
-      try {
-        setLoading(true);
-        setError(null);
+  const loadHomepageData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
 
-        const results =
-          await Promise.allSettled([
-            apiFetch("/user"),
+      const results =
+        await Promise.allSettled([
+          apiFetch("/user"),
+          apiFetch("/topics"),
+          apiFetch("/questions/practice"),
+          apiFetch("/questions/flashcards"),
+          apiFetch("/assessments"),
+          apiFetch("/progress"),
+        ]);
 
-            apiFetch("/topics"),
+      const [
+        userResult,
+        topicsResult,
+        practiceResult,
+        flashcardResult,
+        assessmentResult,
+        progressResult,
+      ] = results;
 
-            apiFetch(
-              "/questions/practice"
-            ),
+      // ======================================================
+      // USER
+      // ======================================================
 
-            apiFetch(
-              "/questions/flashcards"
-            ),
-
-            apiFetch(
-              "/assessments"
-            ),
-
-            apiFetch("/progress"),
-          ]);
-
-        const [
-          userResult,
-          topicsResult,
-          practiceResult,
-          flashcardResult,
-          assessmentResult,
-          progressResult,
-        ] = results;
-
-        // ======================================================
-        // USER
-        // ======================================================
-
-        if (
-          userResult.status ===
-          "fulfilled"
-        ) {
-          const userData =
-            normalizeUser(
-              userResult.value
-            );
-
-          if (userData) {
-            setUser(userData);
-          }
-        } else {
-          console.error(
-            "User request failed:",
-            userResult.reason
+      if (
+        userResult.status ===
+        "fulfilled"
+      ) {
+        const userData =
+          normalizeUser(
+            userResult.value
           );
+
+        if (userData) {
+          setUser(userData);
         }
-
-        // ======================================================
-        // TOPICS
-        // ======================================================
-
-        if (
-          topicsResult.status ===
-          "fulfilled"
-        ) {
-          const topicData =
-            topicsResult.value?.data ??
-            topicsResult.value ??
-            [];
-
-          setTopics(
-            Array.isArray(
-              topicData
-            )
-              ? topicData
-              : []
-          );
-        }
-
-        // ======================================================
-        // PRACTICE
-        // ======================================================
-
-        if (
-          practiceResult.status ===
-          "fulfilled"
-        ) {
-          const practiceData =
-            practiceResult.value?.data ??
-            practiceResult.value ??
-            [];
-
-          setPracticeProblems(
-            Array.isArray(
-              practiceData
-            )
-              ? practiceData
-                  .map(
-                    normalizeQuestion
-                  )
-                  .filter(Boolean)
-              : []
-          );
-        }
-
-        // ======================================================
-        // FLASHCARDS
-        // ======================================================
-
-        if (
-          flashcardResult.status ===
-          "fulfilled"
-        ) {
-          const flashData =
-            flashcardResult.value?.data ??
-            flashcardResult.value ??
-            [];
-
-          const normalizedFlashcards =
-            Array.isArray(
-              flashData
-            )
-              ? flashData
-                  .map(
-                    normalizeQuestion
-                  )
-                  .filter(Boolean)
-              : [];
-
-          setFlashCards(
-            normalizedFlashcards
-          );
-
-          const saved =
-            getSavedFlashcardProgress();
-
-          setFlashAnswered(
-            saved.answered ||
-              {}
-          );
-
-          setFlashResults(
-            saved.results ||
-              {}
-          );
-
-          if (
-            normalizedFlashcards.length >
-            0
-          ) {
-            setFlashIndex(
-              Math.min(
-                saved.index ||
-                  0,
-
-                normalizedFlashcards.length -
-                  1
-              )
-            );
-          }
-
-          let correctCount = 0;
-          let wrongCount = 0;
-
-          Object.values(
-            saved.results ||
-              {}
-          ).forEach(
-            (item) => {
-              if (
-                item?.correct ===
-                true
-              ) {
-                correctCount++;
-              }
-
-              if (
-                item?.correct ===
-                false
-              ) {
-                wrongCount++;
-              }
-            }
-          );
-
-          setFlashCorrect(
-            correctCount
-          );
-
-          setFlashWrong(
-            wrongCount
-          );
-        }
-
-        // ======================================================
-        // ASSESSMENTS
-        // ======================================================
-
-        if (
-          assessmentResult.status ===
-          "fulfilled"
-        ) {
-          const assessmentData =
-            assessmentResult.value?.data ??
-            assessmentResult.value ??
-            [];
-
-          const normalizedAssessments =
-            Array.isArray(
-              assessmentData
-            )
-              ? assessmentData
-                  .map(
-                    normalizeAssessment
-                  )
-                  .filter(Boolean)
-              : [];
-
-          setAssessments(
-            normalizedAssessments
-          );
-        } else {
-          console.error(
-            "Assessment request failed:",
-            assessmentResult.reason
-          );
-        }
-
-        // ======================================================
-        // PROGRESS
-        // ======================================================
-
-        if (
-          progressResult.status ===
-          "fulfilled"
-        ) {
-          const progressData =
-            progressResult.value?.data ??
-            progressResult.value ??
-            {};
-
-          setUserStats(
-            normalizeStats(
-              progressData
-            )
-          );
-        }
-
-      } catch (err) {
-        console.error(
-          "Homepage loading error:",
-          err
-        );
-
-        setError(
-          err.message ||
-            "Unable to load learning data."
-        );
-      } finally {
-        setLoading(false);
       }
-    };
+
+      // ======================================================
+      // TOPICS
+      // ======================================================
+
+      if (
+        topicsResult.status ===
+        "fulfilled"
+      ) {
+        const topicData =
+          topicsResult.value?.data ??
+          topicsResult.value ??
+          [];
+
+        setTopics(
+          Array.isArray(topicData)
+            ? topicData
+            : []
+        );
+      }
+
+      // ======================================================
+      // PRACTICE
+      // ======================================================
+
+      if (
+        practiceResult.status ===
+        "fulfilled"
+      ) {
+        const practiceData =
+          practiceResult.value?.data ??
+          practiceResult.value ??
+          [];
+
+        setPracticeProblems(
+          Array.isArray(
+            practiceData
+          )
+            ? practiceData
+                .map(normalizeQuestion)
+                .filter(Boolean)
+            : []
+        );
+      }
+
+      // ======================================================
+      // FLASHCARDS
+      // ======================================================
+
+      if (
+        flashcardResult.status ===
+        "fulfilled"
+      ) {
+        const flashData =
+          flashcardResult.value?.data ??
+          flashcardResult.value ??
+          [];
+
+        const normalizedFlashcards =
+          Array.isArray(
+            flashData
+          )
+            ? flashData
+                .map(normalizeQuestion)
+                .filter(Boolean)
+            : [];
+
+        setFlashCards(
+          normalizedFlashcards
+        );
+
+        const saved =
+          getSavedFlashcardProgress();
+
+        setFlashAnswered(
+          saved.answered || {}
+        );
+
+        setFlashResults(
+          saved.results || {}
+        );
+
+        if (
+          normalizedFlashcards.length >
+          0
+        ) {
+          setFlashIndex(
+            Math.min(
+              saved.index || 0,
+              normalizedFlashcards.length -
+                1
+            )
+          );
+        }
+
+        let correctCount = 0;
+        let wrongCount = 0;
+
+        Object.values(
+          saved.results || {}
+        ).forEach((item) => {
+          if (item?.correct === true) {
+            correctCount++;
+          }
+
+          if (item?.correct === false) {
+            wrongCount++;
+          }
+        });
+
+        setFlashCorrect(
+          correctCount
+        );
+
+        setFlashWrong(
+          wrongCount
+        );
+      }
+
+      // ======================================================
+      // ASSESSMENTS
+      // ======================================================
+
+      if (
+        assessmentResult.status ===
+        "fulfilled"
+      ) {
+        const assessmentData =
+          assessmentResult.value?.data ??
+          assessmentResult.value ??
+          [];
+
+        const normalizedAssessments =
+          Array.isArray(
+            assessmentData
+          )
+            ? assessmentData
+                .map(
+                  normalizeAssessment
+                )
+                .filter(Boolean)
+            : [];
+
+        setAssessments(
+          normalizedAssessments
+        );
+      }
+
+      // ======================================================
+      // PROGRESS
+      // ======================================================
+
+      if (
+        progressResult.status ===
+        "fulfilled"
+      ) {
+        const progressData =
+          progressResult.value?.data ??
+          progressResult.value ??
+          {};
+
+        setUserStats(
+          normalizeStats(
+            progressData
+          )
+        );
+      }
+    } catch (err) {
+      console.error(
+        "Homepage loading error:",
+        err
+      );
+
+      setError(
+        err.message ||
+          "Unable to load learning data."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     loadHomepageData();
@@ -1025,14 +902,9 @@ const Homepage = () => {
     }
 
     saveFlashcardProgress({
-      answered:
-        flashAnswered,
-
-      results:
-        flashResults,
-
-      index:
-        flashIndex,
+      answered: flashAnswered,
+      results: flashResults,
+      index: flashIndex,
     });
   }, [
     flashAnswered,
@@ -1045,26 +917,20 @@ const Homepage = () => {
   // NAVIGATION
   // ==========================================================
 
-  const navigateTo = (
-    section
-  ) => {
+  const navigateTo = (section) => {
     setActiveSection(section);
     setShowUserMenu(false);
 
     if (
-      section ===
-      "flashcards"
+      section === "flashcards"
     ) {
       setFlashFlipped(false);
     }
 
     if (
-      section ===
-      "assessments"
+      section === "assessments"
     ) {
-      setSelectedAssessment(
-        null
-      );
+      setSelectedAssessment(null);
     }
 
     window.scrollTo({
@@ -1138,9 +1004,7 @@ const Homepage = () => {
 
       try {
         const answer =
-          LETTERS[
-            answerIndex
-          ];
+          LETTERS[answerIndex];
 
         setPracticeSelected(
           answerIndex
@@ -1165,9 +1029,7 @@ const Homepage = () => {
           response?.data ??
           response;
 
-        setPracticeAnswered(
-          true
-        );
+        setPracticeAnswered(true);
 
         setPracticeResult(
           resultData
@@ -1178,9 +1040,7 @@ const Homepage = () => {
             resultData
           );
 
-        if (
-          resultData.correct
-        ) {
+        if (resultData.correct) {
           showToast(
             `✅ Correct! +${points} points`,
             "success"
@@ -1194,24 +1054,15 @@ const Homepage = () => {
           );
         }
 
-        if (
-          resultData.progress
-        ) {
-          setUserStats(
-            normalizeStats(
-              resultData.progress
-            )
-          );
-        }
+        // ====================================================
+        // REFRESH BACKEND PROGRESS
+        // ====================================================
+
+        await refreshProgress();
 
       } catch (err) {
-        setPracticeAnswered(
-          false
-        );
-
-        setPracticeSelected(
-          null
-        );
+        setPracticeAnswered(false);
+        setPracticeSelected(null);
 
         showToast(
           err.message ||
@@ -1226,13 +1077,10 @@ const Homepage = () => {
   // ==========================================================
 
   const currentFlashCard =
-    flashCards[
-      flashIndex
-    ] || null;
+    flashCards[flashIndex] || null;
 
   const currentFlashCardId =
-    currentFlashCard?.id ??
-    null;
+    currentFlashCard?.id ?? null;
 
   const currentFlashResult =
     currentFlashCardId
@@ -1292,7 +1140,6 @@ const Homepage = () => {
         setFlashAnswered(
           (previous) => ({
             ...previous,
-
             [cardId]: true,
           })
         );
@@ -1334,15 +1181,11 @@ const Homepage = () => {
           );
         }
 
-        if (
-          resultData.progress
-        ) {
-          setUserStats(
-            normalizeStats(
-              resultData.progress
-            )
-          );
-        }
+        // ====================================================
+        // REFRESH BACKEND PROGRESS
+        // ====================================================
+
+        await refreshProgress();
 
       } catch (err) {
         showToast(
@@ -1357,72 +1200,63 @@ const Homepage = () => {
   // FLASHCARD NAVIGATION
   // ==========================================================
 
-  const nextFlashCard =
-    () => {
-      if (
-        flashIndex <
-        flashCards.length - 1
-      ) {
-        setFlashIndex(
-          (previous) =>
-            previous + 1
-        );
+  const nextFlashCard = () => {
+    if (
+      flashIndex <
+      flashCards.length - 1
+    ) {
+      setFlashIndex(
+        (previous) =>
+          previous + 1
+      );
 
-        setFlashFlipped(
-          false
-        );
-      } else {
-        showToast(
-          "🎉 All cards completed!",
-          "success"
-        );
-
-        launchConfetti();
-      }
-    };
-
-  const previousFlashCard =
-    () => {
-      if (
-        flashIndex > 0
-      ) {
-        setFlashIndex(
-          (previous) =>
-            previous - 1
-        );
-
-        setFlashFlipped(
-          false
-        );
-      }
-    };
-
-  const resetFlashCards =
-    () => {
-      if (
-        !window.confirm(
-          "Reset this flashcard session?"
-        )
-      ) {
-        return;
-      }
-
-      setFlashIndex(0);
       setFlashFlipped(false);
-      setFlashCorrect(0);
-      setFlashWrong(0);
-      setFlashAnswered({});
-      setFlashResults({});
-
-      localStorage.removeItem(
-        FLASHCARD_STORAGE_KEY
-      );
-
+    } else {
       showToast(
-        "🔄 Flashcards reset!",
-        "info"
+        "🎉 All cards completed!",
+        "success"
       );
-    };
+
+      launchConfetti();
+    }
+  };
+
+  const previousFlashCard = () => {
+    if (flashIndex > 0) {
+      setFlashIndex(
+        (previous) =>
+          previous - 1
+      );
+
+      setFlashFlipped(false);
+    }
+  };
+
+  const resetFlashCards = () => {
+    if (
+      !window.confirm(
+        "Reset this flashcard session?"
+      )
+    ) {
+      return;
+    }
+
+    setFlashIndex(0);
+    setFlashFlipped(false);
+    setFlashCorrect(0);
+    setFlashWrong(0);
+    setFlashAnswered({});
+    setFlashResults({});
+
+    localStorage.removeItem(
+      FLASHCARD_STORAGE_KEY
+    );
+
+    showToast(
+      "🔄 Flashcards reset!",
+      "info"
+    );
+  };
 
   // ==========================================================
   // ASSESSMENT ANSWERS
@@ -1453,10 +1287,6 @@ const Homepage = () => {
           assessmentId
         );
 
-      /*
-        Don't allow changing an answer
-        after it has been recorded.
-      */
       if (
         answers[questionId] !==
         undefined
@@ -1505,96 +1335,163 @@ const Homepage = () => {
   // START / RETRY ASSESSMENT
   // ==========================================================
 
-  const startAssessment =
-    async (assessmentId) => {
-      try {
-        const existing =
-          assessments.find(
-            (item) =>
-              item.id ===
-              assessmentId
-          );
+const startAssessment = async (assessmentId) => {
+  try {
+    const existing = assessments.find(
+      (item) => item.id === assessmentId
+    );
 
-        /*
-          If this is a failed assessment,
-          automatically clear the previous
-          answers before starting again.
-        */
-        if (
-          existing?.status ===
-          "failed"
-        ) {
-          resetAssessmentAnswers(
-            assessmentId
-          );
-        }
+    // ========================================================
+    // FRONTEND LOCK CHECK
+    // ========================================================
 
-        const response =
-          await apiFetch(
-            `/assessments/${assessmentId}`
-          );
+    if (
+      existing?.locked === true ||
+      existing?.status === "passed"
+    ) {
+      showToast(
+        "🔒 You already passed this assessment. It is locked.",
+        "info"
+      );
 
-        const assessment =
-          response?.data ??
-          response;
+      return;
+    }
 
-        const normalizedAssessment =
-          normalizeAssessment(
-            assessment
-          );
+    // ========================================================
+    // FAILED = ALLOW RETAKE
+    // ========================================================
 
-        setAssessments(
-          (previous) =>
-            previous.map(
-              (item) =>
-                item.id ===
-                assessmentId
-                  ? {
-                      ...item,
+    if (existing?.status === "failed") {
+      resetAssessmentAnswers(assessmentId);
+    }
 
-                      ...normalizedAssessment,
+    // ========================================================
+    // FETCH ASSESSMENT
+    // ========================================================
 
-                      questions:
-                        normalizedAssessment?.questions ??
-                        item.questions,
-                    }
-                  : item
-            )
-        );
+    const response = await apiFetch(
+      `/assessments/${assessmentId}`
+    );
 
-        setSelectedAssessment(
-          assessmentId
-        );
+    const assessment =
+      response?.data ?? response;
 
-        window.scrollTo({
-          top: 0,
-          behavior: "smooth",
-        });
+    const normalizedAssessment =
+      normalizeAssessment(assessment);
 
-      } catch (err) {
-        console.error(
-          "Start assessment error:",
-          err
-        );
+    // ========================================================
+    // BACKEND LOCK CHECK
+    // ========================================================
 
-        showToast(
-          err.message ||
-            "Unable to load assessment.",
-          "error"
-        );
-      }
-    };
+    if (
+      normalizedAssessment?.locked === true ||
+      normalizedAssessment?.status === "passed"
+    ) {
+      setAssessments((previous) =>
+        previous.map((item) =>
+          item.id === assessmentId
+            ? {
+                ...item,
+                ...normalizedAssessment,
+                locked: true,
+                status: "passed",
+              }
+            : item
+        )
+      );
 
+      showToast(
+        "🔒 You already passed this assessment. It is locked.",
+        "info"
+      );
+
+      return;
+    }
+
+    // ========================================================
+    // UPDATE ASSESSMENT
+    // ========================================================
+
+    setAssessments((previous) =>
+      previous.map((item) =>
+        item.id === assessmentId
+          ? {
+              ...item,
+              ...normalizedAssessment,
+
+              questions:
+                normalizedAssessment?.questions ??
+                item.questions,
+
+              locked:
+                normalizedAssessment?.locked ??
+                item.locked ??
+                false,
+            }
+          : item
+      )
+    );
+
+    // ========================================================
+    // OPEN
+    // ========================================================
+
+    setSelectedAssessment(assessmentId);
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+
+  } catch (err) {
+    console.error(
+      "Start assessment error:",
+      err
+    );
+
+    // ========================================================
+    // BACKEND 409 = LOCK
+    // ========================================================
+
+    if (
+      err.message
+        ?.toLowerCase()
+        .includes("already passed")
+    ) {
+      setAssessments((previous) =>
+        previous.map((item) =>
+          item.id === assessmentId
+            ? {
+                ...item,
+                locked: true,
+                status: "passed",
+              }
+            : item
+        )
+      );
+
+      showToast(
+        "🔒 You already passed this assessment. It is locked.",
+        "info"
+      );
+
+      return;
+    }
+
+    showToast(
+      err.message ||
+        "Unable to load assessment.",
+      "error"
+    );
+  }
+};
   // ==========================================================
   // CLOSE ASSESSMENT
   // ==========================================================
 
-  const closeAssessment =
-    () => {
-      setSelectedAssessment(
-        null
-      );
-    };
+  const closeAssessment = () => {
+    setSelectedAssessment(null);
+  };
 
   // ==========================================================
   // SUBMIT ASSESSMENT
@@ -1627,9 +1524,7 @@ const Homepage = () => {
           answers
         ).length;
 
-      if (
-        total === 0
-      ) {
+      if (total === 0) {
         showToast(
           "This assessment has no questions.",
           "error"
@@ -1638,9 +1533,7 @@ const Homepage = () => {
         return;
       }
 
-      if (
-        answered !== total
-      ) {
+      if (answered !== total) {
         showToast(
           `Please answer all questions first. ${answered}/${total} answered.`,
           "error"
@@ -1671,25 +1564,36 @@ const Homepage = () => {
             })
           );
 
-        const response =
-          await apiFetch(
-            `/assessments/${assessmentId}/submit`,
-            {
-              method: "POST",
+        console.log("SUBMITTING ASSESSMENT:", assessmentId);
 
-              body: JSON.stringify({
-                answers:
-                  formattedAnswers,
-              }),
-            }
-          );
+console.log(
+  "SUBMIT URL:",
+  `${API_URL}/assessments/${assessmentId}/submit`
+);
 
+console.log(
+  "FORMATTED ANSWERS:",
+  formattedAnswers
+);
+
+const response = await apiFetch(
+  `/assessments/${assessmentId}/submit`,
+  {
+    method: "POST",
+
+    body: JSON.stringify({
+      answers: formattedAnswers,
+    }),
+  }
+);
+
+console.log("SUBMIT RESPONSE:", response);
         const resultData =
           response?.data ??
           response;
 
         // ====================================================
-        // GET CORRECT / TOTAL
+        // SCORE
         // ====================================================
 
         const correct =
@@ -1706,44 +1610,18 @@ const Homepage = () => {
               total
           );
 
-        /*
-          IMPORTANT:
-
-          Always calculate the percentage
-          from correct / total.
-
-          Example:
-
-          1 / 10 = 10%
-
-          NOT 1/10 as "10 correct".
-        */
         const calculatedScore =
           resultTotal > 0
             ? Math.round(
-                (
-                  correct /
-                  resultTotal
-                ) *
+                (correct /
+                  resultTotal) *
                   100
               )
             : 0;
 
-        /*
-          Backend score is allowed if it
-          looks like a percentage, but
-          correct/total is our source of
-          truth for the assessment result.
-        */
         const score =
           calculatedScore;
 
-        /*
-          Passing:
-
-          5/10 = 50% = PASS
-          4/10 = 40% = FAIL
-        */
         const passed =
           score >=
           PASSING_SCORE;
@@ -1759,47 +1637,44 @@ const Homepage = () => {
           );
 
         // ====================================================
-        // UPDATE USER STATS
+        // IMPORTANT:
+        //
+        // DO NOT ONLY USE resultData.progress.
+        //
+        // GET THE ACTUAL CURRENT USER PROGRESS
+        // FROM THE BACKEND.
         // ====================================================
 
-        if (
-          resultData.progress
-        ) {
-          setUserStats(
-            normalizeStats(
-              resultData.progress
-            )
-          );
-        }
+        const latestProgress =
+          await refreshProgress();
 
         // ====================================================
-        // UPDATE ASSESSMENT CARD
+        // UPDATE ASSESSMENT
         // ====================================================
 
         setAssessments(
-          (previous) =>
-            previous.map(
-              (item) =>
-                item.id ===
-                assessmentId
-                  ? {
-                      ...item,
+            (previous) =>
+              previous.map(
+                (item) =>
+                  item.id === assessmentId
+                    ? {
+                        ...item,
 
-                      correct,
+                        correct,
+                        total: resultTotal,
+                        score,
 
-                      total:
-                        resultTotal,
+                        status,
 
-                      score,
+                        attempted: true,
 
-                      status,
-
-                      attempted:
-                        true,
-                    }
-                  : item
-            )
-        );
+                        // IMPORTANT:
+                        // Once passed, permanently lock it
+                        locked: passed,
+                      }
+                    : item
+              )
+          );
 
         // ====================================================
         // RESULT MODAL
@@ -1820,10 +1695,13 @@ const Homepage = () => {
           status,
 
           passed,
+
+          progress:
+            latestProgress,
         });
 
         // ====================================================
-        // CONFETTI ONLY WHEN PASSED
+        // SUCCESS / FAILURE
         // ====================================================
 
         if (passed) {
@@ -1917,9 +1795,7 @@ const Homepage = () => {
           "error"
         );
       } finally {
-        setUserLoading(
-          false
-        );
+        setUserLoading(false);
       }
     };
 
@@ -1958,8 +1834,7 @@ const Homepage = () => {
 
         setUser(null);
 
-        window.location.href =
-          "/";
+        window.location.href = "/";
       }
     };
 
@@ -1987,8 +1862,7 @@ const Homepage = () => {
   // ==========================================================
 
   const stats = {
-    lessons:
-      topics.length,
+    lessons: topics.length,
 
     problems:
       practiceProblems.length,
@@ -2000,6 +1874,10 @@ const Homepage = () => {
       assessments.length,
   };
 
+  // ==========================================================
+  // LEVEL
+  // ==========================================================
+
   const levelNumber =
     Number(
       String(
@@ -2008,11 +1886,32 @@ const Homepage = () => {
       ).replace(/\D/g, "")
     ) || 1;
 
+  // ==========================================================
+  // LEVEL PROGRESS
+  //
+  // 1 POINT = 10%
+  //
+  // Examples:
+  //
+  // 0 points  = 0%
+  // 1 point   = 10%
+  // 2 points  = 20%
+  // 5 points  = 50%
+  // 9 points  = 90%
+  // 10 points = 100%
+  //
+  // Then the level changes.
+  //
+  // ==========================================================
+
   const levelProgress =
     Math.min(
       100,
-      userStats.score % 100 ||
-        0
+      Math.max(
+        0,
+        (Number(userStats.score) || 0) *
+          10
+      )
     );
 
   // ==========================================================
@@ -2121,13 +2020,9 @@ const Homepage = () => {
           }
 
           openProfile={() => {
-            setShowUserMenu(
-              false
-            );
+            setShowUserMenu(false);
 
-            setShowProfile(
-              true
-            );
+            setShowProfile(true);
           }}
 
           handleLogout={
@@ -2452,10 +2347,6 @@ const Homepage = () => {
         closeResult={() => {
           setResult(null);
 
-          /*
-            Close the assessment after
-            viewing the result.
-          */
           setSelectedAssessment(
             null
           );
