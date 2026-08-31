@@ -11,6 +11,7 @@ import AssessmentsSection from "../components/AssessmentsSection";
 import ProfileModal from "../components/ProfileModal";
 import ResultModal from "../components/ResultModal";
 import Toast from "../components/Toast";
+import GenerateLesson from "../components/GenerateLesson";
 
 // ============================================================
 // CONSTANTS
@@ -304,15 +305,6 @@ const normalizeAssessment = (assessment) => {
     assessment.status ??
     null;
 
-  /*
-   * Backend can explicitly return:
-   *
-   * locked: true
-   * status: "passed"
-   *
-   * If locked is true, always treat it as passed/locked.
-   */
-
   const locked =
     assessment.locked === true ||
     status === "passed";
@@ -435,6 +427,9 @@ const Homepage = () => {
   // ==========================================================
   // DATA
   // ==========================================================
+
+  // User-specific lessons
+  const [lessons, setLessons] = useState([]);
 
   const [topics, setTopics] = useState([]);
 
@@ -623,15 +618,6 @@ const Homepage = () => {
   // ==========================================================
   // REFRESH PROGRESS
   // ==========================================================
-  //
-  // IMPORTANT:
-  //
-  // We fetch /progress again after answering.
-  //
-  // This prevents the frontend from staying at
-  // "Level 1" until the user manually refreshes.
-  //
-  // ==========================================================
 
   const refreshProgress = async () => {
     try {
@@ -670,33 +656,23 @@ const Homepage = () => {
       setLoading(true);
       setError(null);
 
-      const results =
-        await Promise.allSettled([
-          apiFetch("/user"),
-          apiFetch("/topics"),
-          apiFetch("/questions/practice"),
-          apiFetch("/questions/flashcards"),
-          apiFetch("/assessments"),
-          apiFetch("/progress"),
-        ]);
-
       const [
         userResult,
+        lessonsResult,
         topicsResult,
-        practiceResult,
-        flashcardResult,
-        assessmentResult,
         progressResult,
-      ] = results;
+      ] = await Promise.allSettled([
+        apiFetch("/user"),
+        apiFetch("/lessons"),
+        apiFetch("/topics"),
+        apiFetch("/progress"),
+      ]);
 
       // ======================================================
       // USER
       // ======================================================
 
-      if (
-        userResult.status ===
-        "fulfilled"
-      ) {
+      if (userResult.status === "fulfilled") {
         const userData =
           normalizeUser(
             userResult.value
@@ -708,13 +684,40 @@ const Homepage = () => {
       }
 
       // ======================================================
+      // LESSONS
+      // ======================================================
+
+      let assignedLessons = [];
+
+      if (lessonsResult.status === "fulfilled") {
+        const lessonData =
+          lessonsResult.value?.lessons ??
+          lessonsResult.value?.data?.lessons ??
+          lessonsResult.value?.data ??
+          [];
+
+        assignedLessons =
+          Array.isArray(lessonData)
+            ? lessonData
+            : [];
+
+        setLessons(
+          assignedLessons
+        );
+      } else {
+        console.error(
+          "Unable to load lessons:",
+          lessonsResult.reason
+        );
+
+        setLessons([]);
+      }
+
+      // ======================================================
       // TOPICS
       // ======================================================
 
-      if (
-        topicsResult.status ===
-        "fulfilled"
-      ) {
+      if (topicsResult.status === "fulfilled") {
         const topicData =
           topicsResult.value?.data ??
           topicsResult.value ??
@@ -726,6 +729,58 @@ const Homepage = () => {
             : []
         );
       }
+
+      // ======================================================
+      // NO ASSIGNED LESSONS
+      // ======================================================
+
+      if (assignedLessons.length === 0) {
+        setPracticeProblems([]);
+        setFlashCards([]);
+        setAssessments([]);
+
+        setFlashAnswered({});
+        setFlashResults({});
+        setFlashCorrect(0);
+        setFlashWrong(0);
+
+        setCurrentPractice(null);
+        setSelectedAssessment(null);
+
+        // Still load progress
+        if (
+          progressResult.status ===
+          "fulfilled"
+        ) {
+          const progressData =
+            progressResult.value?.data ??
+            progressResult.value ??
+            {};
+
+          setUserStats(
+            normalizeStats(
+              progressData
+            )
+          );
+        }
+
+        return;
+      }
+
+      // ======================================================
+      // ONLY FETCH LEARNING CONTENT
+      // IF LESSONS EXIST
+      // ======================================================
+
+      const [
+        practiceResult,
+        flashcardResult,
+        assessmentResult,
+      ] = await Promise.allSettled([
+        apiFetch("/questions/practice"),
+        apiFetch("/questions/flashcards"),
+        apiFetch("/assessments"),
+      ]);
 
       // ======================================================
       // PRACTICE
@@ -745,10 +800,14 @@ const Homepage = () => {
             practiceData
           )
             ? practiceData
-                .map(normalizeQuestion)
+                .map(
+                  normalizeQuestion
+                )
                 .filter(Boolean)
             : []
         );
+      } else {
+        setPracticeProblems([]);
       }
 
       // ======================================================
@@ -765,11 +824,11 @@ const Homepage = () => {
           [];
 
         const normalizedFlashcards =
-          Array.isArray(
-            flashData
-          )
+          Array.isArray(flashData)
             ? flashData
-                .map(normalizeQuestion)
+                .map(
+                  normalizeQuestion
+                )
                 .filter(Boolean)
             : [];
 
@@ -799,30 +858,11 @@ const Homepage = () => {
                 1
             )
           );
+        } else {
+          setFlashIndex(0);
         }
-
-        let correctCount = 0;
-        let wrongCount = 0;
-
-        Object.values(
-          saved.results || {}
-        ).forEach((item) => {
-          if (item?.correct === true) {
-            correctCount++;
-          }
-
-          if (item?.correct === false) {
-            wrongCount++;
-          }
-        });
-
-        setFlashCorrect(
-          correctCount
-        );
-
-        setFlashWrong(
-          wrongCount
-        );
+      } else {
+        setFlashCards([]);
       }
 
       // ======================================================
@@ -838,7 +878,7 @@ const Homepage = () => {
           assessmentResult.value ??
           [];
 
-        const normalizedAssessments =
+        setAssessments(
           Array.isArray(
             assessmentData
           )
@@ -847,11 +887,10 @@ const Homepage = () => {
                   normalizeAssessment
                 )
                 .filter(Boolean)
-            : [];
-
-        setAssessments(
-          normalizedAssessments
+            : []
         );
+      } else {
+        setAssessments([]);
       }
 
       // ======================================================
@@ -888,6 +927,10 @@ const Homepage = () => {
     }
   };
 
+  // ==========================================================
+  // INITIAL LOAD
+  // ==========================================================
+
   useEffect(() => {
     loadHomepageData();
   }, []);
@@ -919,6 +962,7 @@ const Homepage = () => {
 
   const navigateTo = (section) => {
     setActiveSection(section);
+
     setShowUserMenu(false);
 
     if (
@@ -958,6 +1002,7 @@ const Homepage = () => {
       );
 
       setCurrentPractice(null);
+
       return;
     }
 
@@ -1029,7 +1074,9 @@ const Homepage = () => {
           response?.data ??
           response;
 
-        setPracticeAnswered(true);
+        setPracticeAnswered(
+          true
+        );
 
         setPracticeResult(
           resultData
@@ -1040,7 +1087,9 @@ const Homepage = () => {
             resultData
           );
 
-        if (resultData.correct) {
+        if (
+          resultData.correct
+        ) {
           showToast(
             `✅ Correct! +${points} points`,
             "success"
@@ -1054,12 +1103,7 @@ const Homepage = () => {
           );
         }
 
-        // ====================================================
-        // REFRESH BACKEND PROGRESS
-        // ====================================================
-
         await refreshProgress();
-
       } catch (err) {
         setPracticeAnswered(false);
         setPracticeSelected(null);
@@ -1077,10 +1121,12 @@ const Homepage = () => {
   // ==========================================================
 
   const currentFlashCard =
-    flashCards[flashIndex] || null;
+    flashCards[flashIndex] ||
+    null;
 
   const currentFlashCardId =
-    currentFlashCard?.id ?? null;
+    currentFlashCard?.id ??
+    null;
 
   const currentFlashResult =
     currentFlashCardId
@@ -1140,6 +1186,7 @@ const Homepage = () => {
         setFlashAnswered(
           (previous) => ({
             ...previous,
+
             [cardId]: true,
           })
         );
@@ -1181,12 +1228,7 @@ const Homepage = () => {
           );
         }
 
-        // ====================================================
-        // REFRESH BACKEND PROGRESS
-        // ====================================================
-
         await refreshProgress();
-
       } catch (err) {
         showToast(
           err.message ||
@@ -1335,156 +1377,157 @@ const Homepage = () => {
   // START / RETRY ASSESSMENT
   // ==========================================================
 
-const startAssessment = async (assessmentId) => {
-  try {
-    const existing = assessments.find(
-      (item) => item.id === assessmentId
-    );
+  const startAssessment =
+    async (assessmentId) => {
+      try {
+        const existing =
+          assessments.find(
+            (item) =>
+              item.id ===
+              assessmentId
+          );
 
-    // ========================================================
-    // FRONTEND LOCK CHECK
-    // ========================================================
+        if (
+          existing?.locked === true ||
+          existing?.status ===
+            "passed"
+        ) {
+          showToast(
+            "🔒 You already passed this assessment. It is locked.",
+            "info"
+          );
 
-    if (
-      existing?.locked === true ||
-      existing?.status === "passed"
-    ) {
-      showToast(
-        "🔒 You already passed this assessment. It is locked.",
-        "info"
-      );
+          return;
+        }
 
-      return;
-    }
+        if (
+          existing?.status ===
+          "failed"
+        ) {
+          resetAssessmentAnswers(
+            assessmentId
+          );
+        }
 
-    // ========================================================
-    // FAILED = ALLOW RETAKE
-    // ========================================================
+        const response =
+          await apiFetch(
+            `/assessments/${assessmentId}`
+          );
 
-    if (existing?.status === "failed") {
-      resetAssessmentAnswers(assessmentId);
-    }
+        const assessment =
+          response?.data ??
+          response;
 
-    // ========================================================
-    // FETCH ASSESSMENT
-    // ========================================================
+        const normalizedAssessment =
+          normalizeAssessment(
+            assessment
+          );
 
-    const response = await apiFetch(
-      `/assessments/${assessmentId}`
-    );
+        if (
+          normalizedAssessment?.locked ===
+            true ||
+          normalizedAssessment?.status ===
+            "passed"
+        ) {
+          setAssessments(
+            (previous) =>
+              previous.map(
+                (item) =>
+                  item.id ===
+                  assessmentId
+                    ? {
+                        ...item,
+                        ...normalizedAssessment,
+                        locked: true,
+                        status: "passed",
+                      }
+                    : item
+              )
+          );
 
-    const assessment =
-      response?.data ?? response;
+          showToast(
+            "🔒 You already passed this assessment. It is locked.",
+            "info"
+          );
 
-    const normalizedAssessment =
-      normalizeAssessment(assessment);
+          return;
+        }
 
-    // ========================================================
-    // BACKEND LOCK CHECK
-    // ========================================================
+        setAssessments(
+          (previous) =>
+            previous.map(
+              (item) =>
+                item.id ===
+                assessmentId
+                  ? {
+                      ...item,
+                      ...normalizedAssessment,
 
-    if (
-      normalizedAssessment?.locked === true ||
-      normalizedAssessment?.status === "passed"
-    ) {
-      setAssessments((previous) =>
-        previous.map((item) =>
-          item.id === assessmentId
-            ? {
-                ...item,
-                ...normalizedAssessment,
-                locked: true,
-                status: "passed",
-              }
-            : item
-        )
-      );
+                      questions:
+                        normalizedAssessment?.questions ??
+                        item.questions,
 
-      showToast(
-        "🔒 You already passed this assessment. It is locked.",
-        "info"
-      );
+                      locked:
+                        normalizedAssessment?.locked ??
+                        item.locked ??
+                        false,
+                    }
+                  : item
+            )
+        );
 
-      return;
-    }
+        setSelectedAssessment(
+          assessmentId
+        );
 
-    // ========================================================
-    // UPDATE ASSESSMENT
-    // ========================================================
+        window.scrollTo({
+          top: 0,
+          behavior: "smooth",
+        });
+      } catch (err) {
+        console.error(
+          "Start assessment error:",
+          err
+        );
 
-    setAssessments((previous) =>
-      previous.map((item) =>
-        item.id === assessmentId
-          ? {
-              ...item,
-              ...normalizedAssessment,
+        if (
+          err.message
+            ?.toLowerCase()
+            .includes(
+              "already passed"
+            )
+        ) {
+          setAssessments(
+            (previous) =>
+              previous.map(
+                (item) =>
+                  item.id ===
+                  assessmentId
+                    ? {
+                        ...item,
+                        locked: true,
+                        status: "passed",
+                      }
+                    : item
+              )
+          );
 
-              questions:
-                normalizedAssessment?.questions ??
-                item.questions,
+          showToast(
+            "🔒 You already passed this assessment. It is locked.",
+            "info"
+          );
 
-              locked:
-                normalizedAssessment?.locked ??
-                item.locked ??
-                false,
-            }
-          : item
-      )
-    );
+          return;
+        }
 
-    // ========================================================
-    // OPEN
-    // ========================================================
+        showToast(
+          err.message ||
+            "Unable to load assessment.",
+          "error"
+        );
+      }
+    };
 
-    setSelectedAssessment(assessmentId);
-
-    window.scrollTo({
-      top: 0,
-      behavior: "smooth",
-    });
-
-  } catch (err) {
-    console.error(
-      "Start assessment error:",
-      err
-    );
-
-    // ========================================================
-    // BACKEND 409 = LOCK
-    // ========================================================
-
-    if (
-      err.message
-        ?.toLowerCase()
-        .includes("already passed")
-    ) {
-      setAssessments((previous) =>
-        previous.map((item) =>
-          item.id === assessmentId
-            ? {
-                ...item,
-                locked: true,
-                status: "passed",
-              }
-            : item
-        )
-      );
-
-      showToast(
-        "🔒 You already passed this assessment. It is locked.",
-        "info"
-      );
-
-      return;
-    }
-
-    showToast(
-      err.message ||
-        "Unable to load assessment.",
-      "error"
-    );
-  }
-};
   // ==========================================================
   // CLOSE ASSESSMENT
   // ==========================================================
@@ -1564,37 +1607,42 @@ const startAssessment = async (assessmentId) => {
             })
           );
 
-        console.log("SUBMITTING ASSESSMENT:", assessmentId);
+        console.log(
+          "SUBMITTING ASSESSMENT:",
+          assessmentId
+        );
 
-console.log(
-  "SUBMIT URL:",
-  `${API_URL}/assessments/${assessmentId}/submit`
-);
+        console.log(
+          "SUBMIT URL:",
+          `${API_URL}/assessments/${assessmentId}/submit`
+        );
 
-console.log(
-  "FORMATTED ANSWERS:",
-  formattedAnswers
-);
+        console.log(
+          "FORMATTED ANSWERS:",
+          formattedAnswers
+        );
 
-const response = await apiFetch(
-  `/assessments/${assessmentId}/submit`,
-  {
-    method: "POST",
+        const response =
+          await apiFetch(
+            `/assessments/${assessmentId}/submit`,
+            {
+              method: "POST",
 
-    body: JSON.stringify({
-      answers: formattedAnswers,
-    }),
-  }
-);
+              body: JSON.stringify({
+                answers:
+                  formattedAnswers,
+              }),
+            }
+          );
 
-console.log("SUBMIT RESPONSE:", response);
+        console.log(
+          "SUBMIT RESPONSE:",
+          response
+        );
+
         const resultData =
           response?.data ??
           response;
-
-        // ====================================================
-        // SCORE
-        // ====================================================
 
         const correct =
           Number(
@@ -1636,49 +1684,32 @@ console.log("SUBMIT RESPONSE:", response);
             resultData
           );
 
-        // ====================================================
-        // IMPORTANT:
-        //
-        // DO NOT ONLY USE resultData.progress.
-        //
-        // GET THE ACTUAL CURRENT USER PROGRESS
-        // FROM THE BACKEND.
-        // ====================================================
-
         const latestProgress =
           await refreshProgress();
 
-        // ====================================================
-        // UPDATE ASSESSMENT
-        // ====================================================
-
         setAssessments(
-            (previous) =>
-              previous.map(
-                (item) =>
-                  item.id === assessmentId
-                    ? {
-                        ...item,
+          (previous) =>
+            previous.map(
+              (item) =>
+                item.id ===
+                assessmentId
+                  ? {
+                      ...item,
 
-                        correct,
-                        total: resultTotal,
-                        score,
+                      correct,
+                      total:
+                        resultTotal,
+                      score,
 
-                        status,
+                      status,
 
-                        attempted: true,
+                      attempted: true,
 
-                        // IMPORTANT:
-                        // Once passed, permanently lock it
-                        locked: passed,
-                      }
-                    : item
-              )
-          );
-
-        // ====================================================
-        // RESULT MODAL
-        // ====================================================
+                      locked: passed,
+                    }
+                  : item
+            )
+        );
 
         setResult({
           assessment,
@@ -1700,10 +1731,6 @@ console.log("SUBMIT RESPONSE:", response);
             latestProgress,
         });
 
-        // ====================================================
-        // SUCCESS / FAILURE
-        // ====================================================
-
         if (passed) {
           launchConfetti();
 
@@ -1717,7 +1744,6 @@ console.log("SUBMIT RESPONSE:", response);
             "error"
           );
         }
-
       } catch (err) {
         console.error(
           "Assessment submission error:",
@@ -1782,7 +1808,6 @@ console.log("SUBMIT RESPONSE:", response);
           "Profile updated!",
           "success"
         );
-
       } catch (err) {
         console.error(
           "Profile refresh error:",
@@ -1862,7 +1887,8 @@ console.log("SUBMIT RESPONSE:", response);
   // ==========================================================
 
   const stats = {
-    lessons: topics.length,
+    lessons:
+      lessons.length,
 
     problems:
       practiceProblems.length,
@@ -1888,20 +1914,6 @@ console.log("SUBMIT RESPONSE:", response);
 
   // ==========================================================
   // LEVEL PROGRESS
-  //
-  // 1 POINT = 10%
-  //
-  // Examples:
-  //
-  // 0 points  = 0%
-  // 1 point   = 10%
-  // 2 points  = 20%
-  // 5 points  = 50%
-  // 9 points  = 90%
-  // 10 points = 100%
-  //
-  // Then the level changes.
-  //
   // ==========================================================
 
   const levelProgress =
@@ -2064,14 +2076,31 @@ console.log("SUBMIT RESPONSE:", response);
         )}
 
         {/* ==================================================
+            GENERATE LESSON
+        ================================================== */}
+
+        {activeSection ===
+          "generate-lesson" && (
+          <GenerateLesson
+            showToast={
+              showToast
+            }
+
+            onLessonGenerated={
+              loadHomepageData
+            }
+          />
+        )}
+
+        {/* ==================================================
             LEARN
         ================================================== */}
 
         {activeSection ===
           "learn" && (
           <LearnSection
-            topics={
-              topics
+            lessons={
+              lessons
             }
 
             showToast={

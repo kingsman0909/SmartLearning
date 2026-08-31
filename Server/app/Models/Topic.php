@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Topic extends Model
@@ -11,22 +12,28 @@ class Topic extends Model
     use HasFactory;
 
     protected $fillable = [
+        'lesson_id',
         'name',
         'description',
-        'difficulty',
-        'icon',
-        'order',
+        'topic_order',
     ];
 
     protected $casts = [
-        'order' => 'integer',
+        'topic_order' => 'integer',
     ];
 
-    /**
-     * A topic has many questions.
-     */
+    public function lesson(): BelongsTo
+    {
+        return $this->belongsTo(Lesson::class);
+    }
+
     public function questions(): HasMany
     {
         return $this->hasMany(Question::class);
+    }
+
+    public function assessments(): HasMany
+    {
+        return $this->hasMany(Assessment::class);
     }
 }

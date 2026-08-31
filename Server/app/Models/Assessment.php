@@ -3,7 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Assessment extends Model
@@ -13,18 +13,21 @@ class Assessment extends Model
         'description',
         'difficulty',
         'icon',
+        'topic_id',
     ];
 
-    public function questions(): BelongsToMany
+    public function topic(): BelongsTo
     {
-        return $this->belongsToMany(
-            Question::class,
-            'assessment_questions'
-        )
-        ->withPivot('question_order')
-        ->orderBy(
-            'assessment_questions.question_order'
+        return $this->belongsTo(
+            Topic::class
         );
+    }
+
+    public function questions(): HasMany
+    {
+        return $this->hasMany(
+            AssessmentQuestion::class
+        )->orderBy('question_order');
     }
 
     public function attempts(): HasMany

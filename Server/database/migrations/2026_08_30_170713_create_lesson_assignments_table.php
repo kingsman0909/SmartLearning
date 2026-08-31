@@ -8,29 +8,32 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('topics', function (Blueprint $table) {
+        Schema::create('lesson_assignments', function (Blueprint $table) {
             $table->id();
+
+            $table->foreignId('user_id')
+                ->constrained('users')
+                ->cascadeOnDelete()
+                ->cascadeOnUpdate();
 
             $table->foreignId('lesson_id')
                 ->constrained('lessons')
                 ->cascadeOnDelete()
                 ->cascadeOnUpdate();
 
-            $table->string('name');
-            $table->text('description')->nullable();
-            $table->unsignedInteger('topic_order')->default(0);
+            $table->timestamp('assigned_at')->useCurrent();
 
             $table->timestamps();
 
             $table->unique(
-                ['lesson_id', 'name'],
-                'topics_lesson_name_unique'
+                ['user_id', 'lesson_id'],
+                'lesson_assignments_user_lesson_unique'
             );
         });
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('topics');
+        Schema::dropIfExists('lesson_assignments');
     }
 };

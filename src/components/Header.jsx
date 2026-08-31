@@ -14,12 +14,13 @@ const Header = ({
   handleLogout,
 }) => {
   const navigation = [
-    ["home", "🏠 Home"],
-    ["learn", "📚 Learn"],
-    ["practice", "✏️ Practice"],
-    ["flashcards", "🃏 Flash Cards"],
-    ["assessments", "📝 Assessments"],
-  ];
+  ["home", "🏠 Home"],
+  ["learn", "📚 Learn"],
+  ["generate-lesson", "✨ Generate Lesson"],
+  ["practice", "✏️ Practice"],
+  ["flashcards", "🃏 Flash Cards"],
+  ["assessments", "📝 Assessments"],
+];
 
   return (
     <header className="header">
@@ -55,7 +56,6 @@ const Header = ({
       {/* NAVIGATION */}
 
       <nav className="nav-buttons">
-
         {navigation.map(
           ([section, label]) => (
             <button
@@ -73,7 +73,6 @@ const Header = ({
             </button>
           )
         )}
-
       </nav>
 
       {/* USER MENU */}
