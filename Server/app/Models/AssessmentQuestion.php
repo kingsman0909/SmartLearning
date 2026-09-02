@@ -7,32 +7,39 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class AssessmentQuestion extends Model
 {
+    protected $table = 'assessment_questions';
+
     protected $fillable = [
         'assessment_id',
-        'question',
-        'choice_a',
-        'choice_b',
-        'choice_c',
-        'choice_d',
-        'correct_answer',
-        'explanation',
-        'difficulty',
-        'points',
+        'question_id',
         'question_order',
     ];
 
     protected $casts = [
-        'points' => 'integer',
+        'assessment_id' => 'integer',
+        'question_id' => 'integer',
         'question_order' => 'integer',
     ];
 
-    /**
-     * Assessment this question belongs to.
-     */
+    // ============================================================
+    // ASSESSMENT
+    // ============================================================
+
     public function assessment(): BelongsTo
     {
         return $this->belongsTo(
             Assessment::class
+        );
+    }
+
+    // ============================================================
+    // QUESTION
+    // ============================================================
+
+    public function question(): BelongsTo
+    {
+        return $this->belongsTo(
+            Question::class
         );
     }
 }

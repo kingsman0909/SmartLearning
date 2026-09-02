@@ -19,6 +19,14 @@ return [
             'model' => env('GEMINI_MODEL', 'gemini-3.6-flash'),
         ],
 
+        'groq' => [
+                'api_key' => env('GROQ_API_KEY'),
+                'model' => env(
+                    'GROQ_MODEL',
+                    'llama-3.3-70b-versatile'
+                ),
+            ],
+
     'postmark' => [
         'key' => env('POSTMARK_API_KEY'),
     ],

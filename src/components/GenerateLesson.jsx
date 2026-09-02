@@ -1,18 +1,24 @@
 import React, { useRef, useState } from "react";
+
 import "../styles/homepage.css";
 
-const MIN_QUESTIONS = 20;
-const QUESTION_STEP = 5;
+const MIN_QUESTIONS = 1;
+const QUESTION_STEP = 2;
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
-// Backend currently accepts PDF only.
 const ALLOWED_EXTENSIONS = [".pdf"];
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+const API_BASE_URL =
+    import.meta.env.VITE_API_BASE_URL ||
+    "http://127.0.0.1:8000/api";
+
+const MAX_RESUME_ATTEMPTS = 6;
+const RESUME_DELAY_MS = 1200;
 
 const GenerateLesson = ({
     onLessonGenerated,
     showToast,
+    user,
 }) => {
     const fileInputRef = useRef(null);
 
@@ -22,10 +28,10 @@ const GenerateLesson = ({
 
     const [file, setFile] = useState(null);
 
-    // upload -> configure -> processing -> preview
     const [step, setStep] = useState("upload");
 
     const [dragActive, setDragActive] = useState(false);
+
     const [error, setError] = useState("");
 
     const [lessonTitle, setLessonTitle] = useState("");
@@ -48,6 +54,20 @@ const GenerateLesson = ({
     const [isSaving, setIsSaving] =
         useState(false);
 
+    const [generationProgress, setGenerationProgress] =
+        useState({
+            currentTopic: 0,
+            totalTopics: 0,
+            currentTopicName: "",
+            completedTopics: 0,
+        });
+
+    // ============================================================
+    // USER
+    // ============================================================
+
+    const userId = user?.id;
+
     // ============================================================
     // HELPERS
     // ============================================================
@@ -69,6 +89,22 @@ const GenerateLesson = ({
     const showError = (message) => {
         setError(message);
         notify(message, "error");
+    };
+
+    const sleep = (ms) =>
+        new Promise((resolve) =>
+            setTimeout(resolve, ms)
+        );
+
+    const getFileNameWithoutExtension = (fileName) => {
+        if (!fileName) {
+            return "Untitled Lesson";
+        }
+
+        return fileName.replace(
+            /\.[^/.]+$/,
+            ""
+        );
     };
 
     // ============================================================
@@ -128,18 +164,22 @@ const GenerateLesson = ({
 
         setFile(selectedFile);
 
-        // Automatically use filename as initial lesson title.
         setLessonTitle(
             getFileNameWithoutExtension(
                 selectedFile.name
             )
         );
 
-        // Make sure we stay on upload step.
         setStep("upload");
 
-        // Clear previous generated lesson.
         setGeneratedLesson(null);
+
+        setGenerationProgress({
+            currentTopic: 0,
+            totalTopics: 0,
+            currentTopicName: "",
+            completedTopics: 0,
+        });
     };
 
     const handleFileChange = (event) => {
@@ -170,6 +210,7 @@ const GenerateLesson = ({
 
     const handleDragLeave = (event) => {
         event.preventDefault();
+
         setDragActive(false);
     };
 
@@ -181,26 +222,16 @@ const GenerateLesson = ({
         setLessonTitle("");
         setError("");
 
+        setGenerationProgress({
+            currentTopic: 0,
+            totalTopics: 0,
+            currentTopicName: "",
+            completedTopics: 0,
+        });
+
         if (fileInputRef.current) {
             fileInputRef.current.value = "";
         }
-    };
-
-    // ============================================================
-    // FILE NAME
-    // ============================================================
-
-    const getFileNameWithoutExtension = (
-        fileName
-    ) => {
-        if (!fileName) {
-            return "Untitled Lesson";
-        }
-
-        return fileName.replace(
-            /\.[^/.]+$/,
-            ""
-        );
     };
 
     // ============================================================
@@ -224,11 +255,6 @@ const GenerateLesson = ({
 
     // ============================================================
     // STEP 1 -> STEP 2
-    //
-    // IMPORTANT:
-    // THIS DOES NOT CALL THE AI.
-    //
-    // It only moves the user to configuration.
     // ============================================================
 
     const continueToConfigure = () => {
@@ -238,6 +264,7 @@ const GenerateLesson = ({
             showError(
                 "Please select a PDF file first."
             );
+
             return;
         }
 
@@ -253,9 +280,553 @@ const GenerateLesson = ({
     };
 
     // ============================================================
-    // STEP 2 -> STEP 3
+    // API RESPONSE PARSER
+    // ============================================================
+
+    const parseResponse = async (response) => {
+        const responseText =
+            await response.text();
+
+        let data = {};
+
+        try {
+            data = responseText
+                ? JSON.parse(responseText)
+                : {};
+        } catch (error) {
+            console.error(
+                "Invalid JSON response:",
+                responseText
+            );
+
+            throw new Error(
+                "The server returned an invalid response."
+            );
+        }
+
+        /*
+         * Laravel can intentionally return HTTP 500 when
+         * question generation is partial but resumable.
+         */
+
+        if (
+            !response.ok &&
+            data?.resumable !== true
+        ) {
+            console.error(
+                "Backend error:",
+                data
+            );
+
+            if (data?.errors) {
+                const firstError =
+                    Object.values(data.errors)
+                        ?.flat?.()
+                        ?.find(Boolean);
+
+                if (firstError) {
+                    throw new Error(firstError);
+                }
+            }
+
+            throw new Error(
+                data?.message ||
+                    data?.error ||
+                    "Request failed."
+            );
+        }
+
+        return data;
+    };
+
+    // ============================================================
+    // NORMALIZE BACKEND PROGRESS
+    // ============================================================
+
+    const getTopicProgress = (
+        data,
+        expectedEasy,
+        expectedMedium,
+        expectedHard
+    ) => {
+        const progress =
+            data?.progress || {};
+
+        const generatedNow =
+            data?.generated_now || {};
+
+        const readDifficultyProgress = (
+            difficulty,
+            fallback
+        ) => {
+            const value =
+                progress?.[difficulty];
+
+            if (
+                value &&
+                typeof value === "object"
+            ) {
+                return Number(
+                    value.current ??
+                        value.generated ??
+                        value.count ??
+                        fallback
+                );
+            }
+
+            if (
+                typeof value === "number"
+            ) {
+                return value;
+            }
+
+            return Number(
+                generatedNow?.[difficulty] ??
+                    fallback
+            );
+        };
+
+        const easy = Math.min(
+            expectedEasy,
+            Math.max(
+                0,
+                readDifficultyProgress(
+                    "easy",
+                    0
+                )
+            )
+        );
+
+        const medium = Math.min(
+            expectedMedium,
+            Math.max(
+                0,
+                readDifficultyProgress(
+                    "medium",
+                    0
+                )
+            )
+        );
+
+        const hard = Math.min(
+            expectedHard,
+            Math.max(
+                0,
+                readDifficultyProgress(
+                    "hard",
+                    0
+                )
+            )
+        );
+
+        const calculatedTotal =
+            easy +
+            medium +
+            hard;
+
+        const backendTotal =
+            Number(
+                progress?.total_current ??
+                    calculatedTotal
+            );
+
+        const totalCurrent =
+            Math.min(
+                expectedEasy +
+                    expectedMedium +
+                    expectedHard,
+                Math.max(
+                    calculatedTotal,
+                    backendTotal
+                )
+            );
+
+        const totalTarget =
+            Number(
+                progress?.total_target ??
+                    expectedEasy +
+                        expectedMedium +
+                        expectedHard
+            );
+
+        return {
+            easy,
+            medium,
+            hard,
+            totalCurrent,
+            totalTarget,
+        };
+    };
+
+    // ============================================================
+    // STAGE 2
     //
-    // THIS is where the AI generation actually starts.
+    // Generate questions for ONE topic.
+    // ============================================================
+
+    const generateQuestionsForTopic = async (
+        topic,
+        token,
+        topicIndex,
+        totalTopics
+    ) => {
+        if (!topic?.id) {
+            throw new Error(
+                "Generated topic does not have a valid ID."
+            );
+        }
+
+        const topicName =
+            topic.name ||
+            topic.title ||
+            `Topic ${topicIndex + 1}`;
+
+        const expectedEasy =
+            Number(easyQuestions);
+
+        const expectedMedium =
+            Number(mediumQuestions);
+
+        const expectedHard =
+            Number(hardQuestions);
+
+        const expectedTotal =
+            expectedEasy +
+            expectedMedium +
+            expectedHard;
+
+        let latestData = null;
+
+        for (
+            let attempt = 1;
+            attempt <= MAX_RESUME_ATTEMPTS;
+            attempt++
+        ) {
+            setGenerationProgress({
+                currentTopic:
+                    topicIndex + 1,
+
+                totalTopics,
+
+                currentTopicName:
+                    topicName,
+
+                completedTopics:
+                    topicIndex,
+            });
+
+            console.log(
+                "========================================"
+            );
+
+            console.log(
+                `TOPIC ${topicIndex + 1}/${totalTopics} - ATTEMPT ${attempt}`
+            );
+
+            console.log({
+                topic_id:
+                    topic.id,
+
+                topic_name:
+                    topicName,
+
+                easy_questions:
+                    expectedEasy,
+
+                medium_questions:
+                    expectedMedium,
+
+                hard_questions:
+                    expectedHard,
+
+                total_questions:
+                    expectedTotal,
+            });
+
+            console.log(
+                "========================================"
+            );
+
+            const response = await fetch(
+                `${API_BASE_URL}/ai/generate-topic-questions`,
+                {
+                    method: "POST",
+
+                    headers: {
+                        Accept:
+                            "application/json",
+
+                        "Content-Type":
+                            "application/json",
+
+                        Authorization:
+                            `Bearer ${token}`,
+                    },
+
+                    body: JSON.stringify({
+                        topic_id:
+                            topic.id,
+
+                        easy_questions:
+                            expectedEasy,
+
+                        medium_questions:
+                            expectedMedium,
+
+                        hard_questions:
+                            expectedHard,
+                    }),
+                }
+            );
+
+            const data =
+                await parseResponse(response);
+
+            latestData = data;
+
+            console.log(
+                `Topic ${topicIndex + 1} response:`,
+                data
+            );
+
+            // ====================================================
+            // READ PROGRESS
+            // ====================================================
+
+            const progress =
+                getTopicProgress(
+                    data,
+                    expectedEasy,
+                    expectedMedium,
+                    expectedHard
+                );
+
+            console.log(
+                "Normalized topic progress:",
+                progress
+            );
+
+            const isComplete =
+                progress.totalCurrent >=
+                expectedTotal;
+
+            // ====================================================
+            // SUCCESS
+            // ====================================================
+
+            if (
+                data?.success === true ||
+                isComplete
+            ) {
+                console.log(
+                    `✅ Topic "${topicName}" completed: ${progress.totalCurrent}/${expectedTotal}`
+                );
+
+                setGenerationProgress({
+                    currentTopic:
+                        topicIndex + 1,
+
+                    totalTopics,
+
+                    currentTopicName:
+                        topicName,
+
+                    completedTopics:
+                        topicIndex + 1,
+                });
+
+                return {
+                    ...data,
+
+                    progress: {
+                        ...data?.progress,
+
+                        easy: {
+                            current:
+                                progress.easy,
+                        },
+
+                        medium: {
+                            current:
+                                progress.medium,
+                        },
+
+                        hard: {
+                            current:
+                                progress.hard,
+                        },
+
+                        total_current:
+                            progress.totalCurrent,
+
+                        total_target:
+                            expectedTotal,
+                    },
+                };
+            }
+
+            // ====================================================
+            // RESUMABLE PARTIAL GENERATION
+            // ====================================================
+
+            if (
+                data?.resumable === true
+            ) {
+                const remaining =
+                    Math.max(
+                        0,
+                        expectedTotal -
+                            progress.totalCurrent
+                    );
+
+                console.warn(
+                    `⚠️ Topic "${topicName}" is partial: ${progress.totalCurrent}/${expectedTotal}. Remaining: ${remaining}`
+                );
+
+                notify(
+                    `Continuing "${topicName}" — ${progress.totalCurrent}/${expectedTotal} questions generated.`,
+                    "info"
+                );
+
+                if (
+                    attempt <
+                    MAX_RESUME_ATTEMPTS
+                ) {
+                    const delay =
+                        RESUME_DELAY_MS +
+                        (
+                            attempt - 1
+                        ) *
+                            600;
+
+                    console.log(
+                        `Waiting ${delay}ms before resuming topic "${topicName}"...`
+                    );
+
+                    await sleep(delay);
+
+                    continue;
+                }
+            }
+
+            // ====================================================
+            // NON-RESUMABLE FAILURE
+            // ====================================================
+
+            throw new Error(
+                data?.message ||
+                    data?.error ||
+                    `Failed to generate questions for "${topicName}".`
+            );
+        }
+
+        // ========================================================
+        // MAX RETRIES
+        // ========================================================
+
+        const finalProgress =
+            getTopicProgress(
+                latestData || {},
+                expectedEasy,
+                expectedMedium,
+                expectedHard
+            );
+
+        throw new Error(
+            `Question generation for "${topicName}" could not be completed after ${MAX_RESUME_ATTEMPTS} attempts. Current progress: ${finalProgress.totalCurrent}/${expectedTotal}.`
+        );
+    };
+
+    // ============================================================
+    // STAGE 3
+    //
+    // Generate assessments AFTER all questions are complete.
+    // ============================================================
+
+    const generateAssessments = async (
+        lessonId,
+        token
+    ) => {
+        if (!lessonId) {
+            throw new Error(
+                "Lesson ID is missing. Cannot generate assessments."
+            );
+        }
+
+        console.log(
+            "========================================"
+        );
+
+        console.log(
+            "STAGE 3: Generating assessments..."
+        );
+
+        console.log({
+            lesson_id:
+                lessonId,
+        });
+
+        console.log(
+            "========================================"
+        );
+
+        setGenerationProgress(
+            (current) => ({
+                ...current,
+
+                currentTopicName:
+                    "Creating assessments...",
+            })
+        );
+
+        const response = await fetch(
+            `${API_BASE_URL}/assessments/generate`,
+            {
+                method: "POST",
+
+                headers: {
+                    Accept:
+                        "application/json",
+
+                    "Content-Type":
+                        "application/json",
+
+                    Authorization:
+                        `Bearer ${token}`,
+                },
+
+                body: JSON.stringify({
+                    lesson_id:
+                        lessonId,
+                }),
+            }
+        );
+
+        const data =
+            await parseResponse(response);
+
+        console.log(
+            "STAGE 3 RESPONSE:",
+            data
+        );
+
+        if (!data?.success) {
+            throw new Error(
+                data?.message ||
+                    "Assessment generation failed."
+            );
+        }
+
+        console.log(
+            "✅ Assessments generated successfully:",
+            data?.data
+        );
+
+        return data;
+    };
+
+    // ============================================================
+    // STEP 2 -> GENERATE
     // ============================================================
 
     const startGeneration = async () => {
@@ -267,6 +838,7 @@ const GenerateLesson = ({
             showError(
                 `Each difficulty must have at least ${MIN_QUESTIONS} questions.`
             );
+
             return;
         }
 
@@ -274,15 +846,61 @@ const GenerateLesson = ({
             showError(
                 "Please enter a lesson title."
             );
+
+            return;
+        }
+
+        // ========================================================
+        // USER ID VALIDATION
+        // ========================================================
+
+        if (
+            userId === undefined ||
+            userId === null ||
+            userId === ""
+        ) {
+            console.error(
+                "GenerateLesson: user object:",
+                user
+            );
+
+            showError(
+                "User ID is missing. Please refresh the page and log in again."
+            );
+
+            return;
+        }
+
+        const numericUserId =
+            Number(userId);
+
+        if (
+            !Number.isInteger(
+                numericUserId
+            ) ||
+            numericUserId <= 0
+        ) {
+            console.error(
+                "Invalid user.id:",
+                userId
+            );
+
+            showError(
+                "Invalid user ID. Please refresh the page and log in again."
+            );
+
             return;
         }
 
         setError("");
+
         setIsProcessing(true);
+
         setStep("processing");
 
         try {
-            const token = getToken();
+            const token =
+                getToken();
 
             if (!token) {
                 throw new Error(
@@ -291,12 +909,21 @@ const GenerateLesson = ({
             }
 
             // ====================================================
-            // FORM DATA
+            // STAGE 1
             // ====================================================
 
-            const formData = new FormData();
+            const formData =
+                new FormData();
 
-            formData.append("file", file);
+            formData.append(
+                "file",
+                file
+            );
+
+            formData.append(
+                "lesson_title",
+                lessonTitle.trim()
+            );
 
             formData.append(
                 "easy_questions",
@@ -313,116 +940,90 @@ const GenerateLesson = ({
                 String(hardQuestions)
             );
 
-            // ====================================================
-            // DEBUG
-            // ====================================================
+            formData.append(
+                "user_id",
+                String(numericUserId)
+            );
 
             console.log(
-                "Sending lesson generation request..."
+                "========================================"
+            );
+
+            console.log(
+                "STAGE 1: Generating lesson and topics..."
             );
 
             console.log({
-                file: file.name,
-                lesson_title: lessonTitle,
-                easy_questions: easyQuestions,
-                medium_questions: mediumQuestions,
-                hard_questions: hardQuestions,
-                total_questions:
+                file:
+                    file.name,
+
+                lesson_title:
+                    lessonTitle.trim(),
+
+                easy_questions:
+                    easyQuestions,
+
+                medium_questions:
+                    mediumQuestions,
+
+                hard_questions:
+                    hardQuestions,
+
+                total_questions_per_topic:
                     easyQuestions +
                     mediumQuestions +
                     hardQuestions,
+
+                user_id:
+                    numericUserId,
             });
 
-            // ====================================================
-            // AI GENERATION REQUEST
-            // ====================================================
-
-            const response = await fetch(
-                `${API_BASE_URL}/ai/generate-lesson`,
-                {
-                    method: "POST",
-
-                    headers: {
-                        Accept:
-                            "application/json",
-
-                        Authorization:
-                            `Bearer ${token}`,
-                    },
-
-                    body: formData,
-                }
+            console.log(
+                "========================================"
             );
 
-            // ====================================================
-            // READ RESPONSE
-            // ====================================================
+            const lessonResponse =
+                await fetch(
+                    `${API_BASE_URL}/ai/generate-lesson`,
+                    {
+                        method: "POST",
 
-            const responseText =
-                await response.text();
+                        headers: {
+                            Accept:
+                                "application/json",
 
-            let data;
+                            Authorization:
+                                `Bearer ${token}`,
+                        },
 
-            try {
-                data =
-                    responseText
-                        ? JSON.parse(
-                              responseText
-                          )
-                        : {};
-            } catch (jsonError) {
-                console.error(
-                    "Invalid JSON response:",
-                    responseText
+                        body:
+                            formData,
+                    }
                 );
 
-                throw new Error(
-                    "The server returned an invalid response."
+            const lessonData =
+                await parseResponse(
+                    lessonResponse
                 );
-            }
 
             console.log(
-                "AI lesson generation response:",
-                data
+                "STAGE 1 RESPONSE:",
+                lessonData
             );
 
-            // ====================================================
-            // BACKEND ERROR
-            // ====================================================
-
-            if (!response.ok) {
-                console.error(
-                    "Backend error:",
-                    data
-                );
-
-                const backendMessage =
-                    data?.message ||
-                    data?.error ||
-                    "Failed to generate lesson.";
-
+            if (!lessonData?.success) {
                 throw new Error(
-                    backendMessage
-                );
-            }
-
-            // ====================================================
-            // GENERATION FAILURE
-            // ====================================================
-
-            if (!data?.success) {
-                throw new Error(
-                    data?.message ||
+                    lessonData?.message ||
                         "Lesson generation failed."
                 );
             }
 
             // ====================================================
-            // BACKEND ALREADY SAVED LESSON
+            // SAVED LESSON
             // ====================================================
 
             const savedLesson =
-                data?.data;
+                lessonData?.data;
 
             if (!savedLesson) {
                 throw new Error(
@@ -436,55 +1037,350 @@ const GenerateLesson = ({
             );
 
             // ====================================================
-            // NORMALIZE BACKEND DATA
+            // ASSIGNMENT
             // ====================================================
 
-            const normalizedTopics =
-                Array.isArray(
-                    savedLesson.topics
-                )
-                    ? savedLesson.topics.map(
-                          (topic) => ({
-                              id: topic.id,
+            console.log(
+                "Lesson assignment:",
+                lessonData?.assignment
+            );
 
-                              title:
-                                  topic.name,
+            // ====================================================
+            // TOPICS
+            // ====================================================
 
-                              name:
-                                  topic.name,
-
-                              description:
-                                  topic.description ||
-                                  "",
-
-                              questions:
-                                  Array.isArray(
-                                      topic.questions
-                                  )
-                                      ? topic.questions
-                                      : [],
-
-                              assessment:
-                                  topic.assessment ||
-                                  null,
-                          })
-                      )
-                    : [];
-
-            const normalizedAssessments =
+            const generatedTopics =
                 Array.isArray(
                     savedLesson.topics
                 )
                     ? savedLesson.topics
-                          .map(
-                              (topic) =>
-                                  topic.assessment
-                          )
-                          .filter(Boolean)
                     : [];
 
+            if (
+                generatedTopics.length === 0
+            ) {
+                throw new Error(
+                    "Lesson was created, but no topics were returned."
+                );
+            }
+
+            console.log(
+                `Found ${generatedTopics.length} topics.`
+            );
+
+            console.log(
+                "Topics:",
+                generatedTopics
+            );
+
+            setGenerationProgress({
+                currentTopic: 0,
+
+                totalTopics:
+                    generatedTopics.length,
+
+                currentTopicName:
+                    "",
+
+                completedTopics:
+                    0,
+            });
+
+            // ====================================================
+            // STAGE 2
+            // ====================================================
+
+            console.log(
+                "========================================"
+            );
+
+            console.log(
+                "STAGE 2: Generating questions per topic..."
+            );
+
+            console.log(
+                "Sequential generation enabled."
+            );
+
+            console.log(
+                "========================================"
+            );
+
+            const questionResults = [];
+
+            for (
+                let index = 0;
+                index < generatedTopics.length;
+                index++
+            ) {
+                const topic =
+                    generatedTopics[index];
+
+                const topicResult =
+                    await generateQuestionsForTopic(
+                        topic,
+                        token,
+                        index,
+                        generatedTopics.length
+                    );
+
+                questionResults.push({
+                    topicId:
+                        topic.id,
+
+                    topicName:
+                        topic.name ||
+                        topic.title ||
+                        `Topic ${index + 1}`,
+
+                    result:
+                        topicResult,
+                });
+
+                console.log(
+                    `✅ Finished topic ${index + 1}/${generatedTopics.length}`
+                );
+            }
+
+            // ====================================================
+            // STAGE 2 COMPLETE
+            // ====================================================
+
+            console.log(
+                "========================================"
+            );
+
+            console.log(
+                "STAGE 2 COMPLETE"
+            );
+
+            console.log(
+                "ALL TOPIC QUESTIONS COMPLETED."
+            );
+
+            console.log(
+                "Question generation results:",
+                questionResults
+            );
+
+            console.log(
+                "========================================"
+            );
+
+            // ====================================================
+            // VERIFY ALL TOPICS COMPLETED
+            // ====================================================
+
+            if (
+                questionResults.length !==
+                generatedTopics.length
+            ) {
+                throw new Error(
+                    "Not all topics finished question generation. Assessments will not be created."
+                );
+            }
+
+            // ====================================================
+            // STAGE 3
+            //
+            // ONLY NOW create assessments.
+            // ====================================================
+
+            notify(
+                "All questions generated. Creating assessments...",
+                "info"
+            );
+
+            const assessmentData =
+                await generateAssessments(
+                    savedLesson.id,
+                    token
+                );
+
+            // ====================================================
+            // STAGE 3 COMPLETE
+            // ====================================================
+
+            console.log(
+                "========================================"
+            );
+
+            console.log(
+                "STAGE 3 COMPLETE"
+            );
+
+            console.log(
+                "Assessment results:",
+                assessmentData
+            );
+
+            console.log(
+                "========================================"
+            );
+
+            // ====================================================
+            // NORMALIZED ASSESSMENTS
+            // ====================================================
+
+            const normalizedAssessments =
+                Array.isArray(
+                    assessmentData?.data
+                )
+                    ? assessmentData.data
+                    : [];
+
+            if (
+                normalizedAssessments.length === 0
+            ) {
+                throw new Error(
+                    "Questions were generated, but no assessments were created."
+                );
+            }
+
+            console.log(
+                `✅ ${normalizedAssessments.length} assessments created.`
+            );
+
+            // ====================================================
+            // NORMALIZE TOPICS
+            // ====================================================
+
+            const normalizedTopics =
+                generatedTopics.map(
+                    (topic, index) => {
+                        const result =
+                            questionResults.find(
+                                (item) =>
+                                    Number(
+                                        item.topicId
+                                    ) ===
+                                    Number(
+                                        topic.id
+                                    )
+                            );
+
+                        const resultData =
+                            result?.result ||
+                            {};
+
+                        const resultQuestions =
+                            Array.isArray(
+                                resultData
+                                    ?.data
+                                    ?.questions
+                            )
+                                ? resultData
+                                      .data
+                                      .questions
+                                : [];
+
+                        const resultProgress =
+                            getTopicProgress(
+                                resultData,
+                                Number(
+                                    easyQuestions
+                                ),
+                                Number(
+                                    mediumQuestions
+                                ),
+                                Number(
+                                    hardQuestions
+                                )
+                            );
+
+                        const expectedTopicQuestions =
+                            Number(
+                                easyQuestions
+                            ) +
+                            Number(
+                                mediumQuestions
+                            ) +
+                            Number(
+                                hardQuestions
+                            );
+
+                        const actualQuestionCount =
+                            Math.max(
+                                resultProgress.totalCurrent,
+                                resultQuestions.length
+                            );
+
+                        const topicAssessment =
+                            normalizedAssessments.find(
+                                (
+                                    assessment
+                                ) =>
+                                    Number(
+                                        assessment.topic_id
+                                    ) ===
+                                    Number(
+                                        topic.id
+                                    )
+                            ) || null;
+
+                        return {
+                            id:
+                                topic.id,
+
+                            title:
+                                topic.name ||
+                                topic.title ||
+                                "Untitled Topic",
+
+                            name:
+                                topic.name ||
+                                topic.title ||
+                                "Untitled Topic",
+
+                            description:
+                                topic.description ||
+                                "",
+
+                            questions:
+                                resultQuestions,
+
+                            assessment:
+                                topicAssessment,
+
+                            questionsGenerated:
+                                actualQuestionCount >=
+                                expectedTopicQuestions,
+
+                            questionCount:
+                                actualQuestionCount,
+
+                            questionProgress: {
+                                easy:
+                                    resultProgress.easy,
+
+                                medium:
+                                    resultProgress.medium,
+
+                                hard:
+                                    resultProgress.hard,
+
+                                total:
+                                    resultProgress.totalCurrent,
+
+                                target:
+                                    expectedTopicQuestions,
+                            },
+                        };
+                    }
+                );
+
+            // ====================================================
+            // NORMALIZED LESSON
+            // ====================================================
+
+            const totalQuestionsPerTopic =
+                Number(easyQuestions) +
+                Number(mediumQuestions) +
+                Number(hardQuestions);
+
             const normalizedLesson = {
-                id: savedLesson.id,
+                id:
+                    savedLesson.id,
 
                 title:
                     savedLesson.title ||
@@ -505,24 +1401,57 @@ const GenerateLesson = ({
                     normalizedTopics,
 
                 questions: {
-                    easy: easyQuestions,
-                    medium: mediumQuestions,
-                    hard: hardQuestions,
+                    easy:
+                        Number(easyQuestions),
+
+                    medium:
+                        Number(mediumQuestions),
+
+                    hard:
+                        Number(hardQuestions),
                 },
 
                 totalQuestions:
-                    easyQuestions +
-                    mediumQuestions +
-                    hardQuestions,
+                    totalQuestionsPerTopic,
+
+                totalQuestionsAllTopics:
+                    totalQuestionsPerTopic *
+                    generatedTopics.length,
 
                 assessments:
                     normalizedAssessments,
 
-                raw: savedLesson,
+                raw:
+                    savedLesson,
+
+                assignedUserId:
+                    numericUserId,
+
+                assignment:
+                    lessonData?.assignment ||
+                    {
+                        user_id:
+                            numericUserId,
+
+                        lesson_id:
+                            savedLesson.id,
+
+                        status:
+                            "not_started",
+
+                        progress:
+                            0,
+                    },
+
+                questionGenerationCompleted:
+                    true,
+
+                assessmentGenerationCompleted:
+                    true,
             };
 
             // ====================================================
-            // UPDATE STATE
+            // STATE
             // ====================================================
 
             setGeneratedLesson(
@@ -534,18 +1463,36 @@ const GenerateLesson = ({
             );
 
             // ====================================================
-            // MOVE TO PREVIEW
+            // FINAL PROGRESS
+            // ====================================================
+
+            setGenerationProgress({
+                currentTopic:
+                    generatedTopics.length,
+
+                totalTopics:
+                    generatedTopics.length,
+
+                currentTopicName:
+                    "All questions and assessments completed",
+
+                completedTopics:
+                    generatedTopics.length,
+            });
+
+            // ====================================================
+            // PREVIEW
             // ====================================================
 
             setStep("preview");
 
             notify(
-                "Lesson generated and saved successfully!",
+                `Lesson, questions, and ${normalizedAssessments.length} assessments generated successfully!`,
                 "success"
             );
 
             // ====================================================
-            // PARENT CALLBACK
+            // CALLBACK
             // ====================================================
 
             if (
@@ -556,16 +1503,19 @@ const GenerateLesson = ({
                     onLessonGenerated(
                         normalizedLesson
                     );
-                } catch (callbackError) {
+                } catch (
+                    callbackError
+                ) {
                     console.error(
                         "onLessonGenerated error:",
                         callbackError
                     );
                 }
             }
+
         } catch (err) {
             console.error(
-                "Lesson generation error:",
+                "Lesson/question/assessment generation error:",
                 err
             );
 
@@ -573,7 +1523,7 @@ const GenerateLesson = ({
 
             showError(
                 err?.message ||
-                    "Unable to generate and save the lesson."
+                    "Unable to generate the lesson, questions, and assessments."
             );
         } finally {
             setIsProcessing(false);
@@ -582,30 +1532,31 @@ const GenerateLesson = ({
 
     // ============================================================
     // SAVE LESSON
-    //
-    // Backend already saves the lesson during generation.
-    // This button only confirms that fact.
     // ============================================================
 
     const saveLesson = async (event) => {
         event?.preventDefault();
         event?.stopPropagation();
 
-        if (!generatedLesson || isSaving) {
+        if (
+            !generatedLesson ||
+            isSaving
+        ) {
             return;
         }
 
         setIsSaving(true);
+
         setError("");
 
         try {
             console.log(
-                "Lesson already saved in database:",
+                "Lesson, questions, and assessments already saved in database:",
                 generatedLesson
             );
 
             notify(
-                "Lesson is already saved successfully.",
+                "Lesson, questions, and assessments are already saved successfully.",
                 "success"
             );
         } catch (err) {
@@ -655,6 +1606,13 @@ const GenerateLesson = ({
 
         setIsSaving(false);
 
+        setGenerationProgress({
+            currentTopic: 0,
+            totalTopics: 0,
+            currentTopicName: "",
+            completedTopics: 0,
+        });
+
         if (fileInputRef.current) {
             fileInputRef.current.value = "";
         }
@@ -689,9 +1647,7 @@ const GenerateLesson = ({
     return (
         <div className="generate-lesson">
 
-            {/* ==================================================
-                HEADER
-            ================================================== */}
+            {/* HEADER */}
 
             <div className="generate-lesson-header">
                 <div>
@@ -713,18 +1669,20 @@ const GenerateLesson = ({
                 </div>
             </div>
 
-            {/* ==================================================
-                ERROR
-            ================================================== */}
+            {/* ERROR */}
 
             {error && (
                 <div
                     className="generator-error"
                     role="alert"
                 >
-                    <span>⚠️</span>
+                    <span>
+                        ⚠️
+                    </span>
 
-                    <p>{error}</p>
+                    <p>
+                        {error}
+                    </p>
 
                     <button
                         type="button"
@@ -738,13 +1696,9 @@ const GenerateLesson = ({
                 </div>
             )}
 
-            {/* ==================================================
-                STEP INDICATOR
-            ================================================== */}
+            {/* STEP INDICATOR */}
 
             <div className="generator-steps">
-
-                {/* STEP 1 */}
 
                 <div
                     className={`generator-step ${
@@ -765,12 +1719,12 @@ const GenerateLesson = ({
                             : "✓"}
                     </span>
 
-                    <p>Upload</p>
+                    <p>
+                        Upload
+                    </p>
                 </div>
 
                 <div className="step-line" />
-
-                {/* STEP 2 */}
 
                 <div
                     className={`generator-step ${
@@ -793,12 +1747,12 @@ const GenerateLesson = ({
                             : "2"}
                     </span>
 
-                    <p>Configure</p>
+                    <p>
+                        Configure
+                    </p>
                 </div>
 
                 <div className="step-line" />
-
-                {/* STEP 3 */}
 
                 <div
                     className={`generator-step ${
@@ -815,12 +1769,12 @@ const GenerateLesson = ({
                             : "3"}
                     </span>
 
-                    <p>Generate</p>
+                    <p>
+                        Generate
+                    </p>
                 </div>
 
                 <div className="step-line" />
-
-                {/* STEP 4 */}
 
                 <div
                     className={`generator-step ${
@@ -833,18 +1787,22 @@ const GenerateLesson = ({
                         4
                     </span>
 
-                    <p>Preview</p>
+                    <p>
+                        Preview
+                    </p>
                 </div>
+
             </div>
 
             {/* ==================================================
-                STEP 1 — UPLOAD
+                STEP 1
             ================================================== */}
 
             {step === "upload" && (
                 <div className="generator-card">
 
                     <div className="generator-card-title">
+
                         <h2>
                             Upload Learning Material
                         </h2>
@@ -854,9 +1812,8 @@ const GenerateLesson = ({
                             that will be used to
                             create your lesson.
                         </p>
-                    </div>
 
-                    {/* UPLOAD ZONE */}
+                    </div>
 
                     <div
                         className={`upload-zone ${
@@ -910,6 +1867,7 @@ const GenerateLesson = ({
                                 </div>
 
                                 <div className="selected-file-info">
+
                                     <strong>
                                         {file.name}
                                     </strong>
@@ -919,6 +1877,7 @@ const GenerateLesson = ({
                                             file.size
                                         )}
                                     </span>
+
                                 </div>
 
                                 <button
@@ -931,11 +1890,11 @@ const GenerateLesson = ({
                                 >
                                     ×
                                 </button>
+
                             </div>
                         )}
-                    </div>
 
-                    {/* HIDDEN FILE INPUT */}
+                    </div>
 
                     <input
                         ref={fileInputRef}
@@ -946,8 +1905,6 @@ const GenerateLesson = ({
                             handleFileChange
                         }
                     />
-
-                    {/* ACTION */}
 
                     <div className="upload-actions">
 
@@ -963,11 +1920,12 @@ const GenerateLesson = ({
                         </button>
 
                     </div>
+
                 </div>
             )}
 
             {/* ==================================================
-                STEP 2 — CONFIGURE
+                STEP 2
             ================================================== */}
 
             {step === "configure" && (
@@ -989,11 +1947,8 @@ const GenerateLesson = ({
                             how many questions AI
                             should generate.
                         </p>
-                    </div>
 
-                    {/* ==================================================
-                        LESSON TITLE
-                    ================================================== */}
+                    </div>
 
                     <div className="form-group">
 
@@ -1013,17 +1968,15 @@ const GenerateLesson = ({
                             placeholder="Enter lesson title"
                             maxLength={150}
                         />
-                    </div>
 
-                    {/* ==================================================
-                        UPLOADED MATERIAL
-                    ================================================== */}
+                    </div>
 
                     <div className="topics-preview">
 
                         <div className="section-heading">
 
                             <div>
+
                                 <h3>
                                     Uploaded Material
                                 </h3>
@@ -1034,7 +1987,9 @@ const GenerateLesson = ({
                                     by AI when you
                                     generate the lesson.
                                 </p>
+
                             </div>
+
                         </div>
 
                         <div className="generated-topic">
@@ -1044,6 +1999,7 @@ const GenerateLesson = ({
                             </div>
 
                             <div>
+
                                 <h4>
                                     {file?.name}
                                 </h4>
@@ -1055,19 +2011,19 @@ const GenerateLesson = ({
                                           )
                                         : ""}
                                 </p>
-                            </div>
-                        </div>
-                    </div>
 
-                    {/* ==================================================
-                        QUESTION CONFIGURATION
-                    ================================================== */}
+                            </div>
+
+                        </div>
+
+                    </div>
 
                     <div className="question-config">
 
                         <div className="section-heading">
 
                             <div>
+
                                 <h3>
                                     Question Configuration
                                 </h3>
@@ -1076,9 +2032,12 @@ const GenerateLesson = ({
                                     Minimum of{" "}
                                     {MIN_QUESTIONS}{" "}
                                     questions per
-                                    difficulty.
+                                    difficulty,
+                                    per topic.
                                 </p>
+
                             </div>
+
                         </div>
 
                         <div className="difficulty-grid">
@@ -1118,11 +2077,10 @@ const GenerateLesson = ({
 
                         </div>
 
-                        {/* TOTAL */}
-
                         <div className="question-total">
+
                             <strong>
-                                Total Questions
+                                Questions Per Topic
                             </strong>
 
                             <span>
@@ -1132,12 +2090,10 @@ const GenerateLesson = ({
                                     hardQuestions
                                 }
                             </span>
-                        </div>
-                    </div>
 
-                    {/* ==================================================
-                        ACTIONS
-                    ================================================== */}
+                        </div>
+
+                    </div>
 
                     <div className="generator-actions">
 
@@ -1169,11 +2125,12 @@ const GenerateLesson = ({
                         </button>
 
                     </div>
+
                 </div>
             )}
 
             {/* ==================================================
-                STEP 3 — PROCESSING
+                STEP 3
             ================================================== */}
 
             {step === "processing" && (
@@ -1188,52 +2145,181 @@ const GenerateLesson = ({
                     </div>
 
                     <h2>
-                        Generating your lesson...
+                        {generationProgress.currentTopicName ===
+                        "Creating assessments..."
+                            ? "Creating assessments..."
+                            : "Generating your lesson..."}
                     </h2>
 
                     <p>
-                        Your material is being
-                        analyzed by AI. This may
-                        take a while depending on
-                        the number of questions
-                        requested.
+                        {generationProgress.currentTopicName ===
+                        "Creating assessments..."
+                            ? "All questions are complete. Creating and organizing your assessments..."
+                            : "AI is generating the lesson, topics, and questions for each topic."}
                     </p>
+
+                    {generationProgress.totalTopics > 0 && (
+                        <div
+                            className="topic-generation-progress"
+                            style={{
+                                marginTop: "20px",
+                                padding: "16px",
+                                borderRadius: "12px",
+                                background:
+                                    "rgba(255,255,255,0.05)",
+                            }}
+                        >
+
+                            <strong>
+                                {generationProgress.currentTopicName ===
+                                "Creating assessments..."
+                                    ? "Generating Assessments"
+                                    : "Generating Questions"}
+                            </strong>
+
+                            <p>
+                                {generationProgress.currentTopicName ===
+                                "Creating assessments..."
+                                    ? "All topics completed"
+                                    : (
+                                        <>
+                                            Topic{" "}
+                                            {
+                                                generationProgress.currentTopic
+                                            }{" "}
+                                            of{" "}
+                                            {
+                                                generationProgress.totalTopics
+                                            }
+                                        </>
+                                    )}
+                            </p>
+
+                            {generationProgress.currentTopicName &&
+                                generationProgress.currentTopicName !==
+                                    "Creating assessments..." && (
+                                <p>
+                                    <strong>
+                                        Current:
+                                    </strong>{" "}
+                                    {
+                                        generationProgress.currentTopicName
+                                    }
+                                </p>
+                            )}
+
+                            <div
+                                style={{
+                                    width: "100%",
+                                    height: "8px",
+                                    background:
+                                        "rgba(255,255,255,0.1)",
+                                    borderRadius:
+                                        "10px",
+                                    overflow:
+                                        "hidden",
+                                    marginTop:
+                                        "10px",
+                                }}
+                            >
+
+                                <div
+                                    style={{
+                                        width:
+                                            generationProgress.currentTopicName ===
+                                            "Creating assessments..."
+                                                ? "100%"
+                                                : `${
+                                                      generationProgress.totalTopics > 0
+                                                          ? (
+                                                                generationProgress.completedTopics /
+                                                                    generationProgress.totalTopics
+                                                            ) *
+                                                            100
+                                                          : 0
+                                                  }%`,
+                                        height: "100%",
+                                        background:
+                                            "currentColor",
+                                        transition:
+                                            "width 0.3s ease",
+                                    }}
+                                />
+
+                            </div>
+
+                            <small>
+                                {
+                                    generationProgress.currentTopicName ===
+                                    "Creating assessments..."
+                                        ? "Creating assessments from generated questions..."
+                                        : (
+                                            <>
+                                                {
+                                                    generationProgress.completedTopics
+                                                }{" "}
+                                                topic
+                                                {generationProgress.completedTopics ===
+                                                1
+                                                    ? ""
+                                                    : "s"}{" "}
+                                                completed
+                                            </>
+                                        )}
+                            </small>
+
+                        </div>
+                    )}
 
                     <div className="processing-status">
 
                         <div className="processing-item">
                             <span>✓</span>
-
                             Validating uploaded
                             material
                         </div>
 
                         <div className="processing-item">
                             <span>✓</span>
-
                             Extracting learning
                             material
                         </div>
 
                         <div className="processing-item">
-                            <span className="processing-dot" />
-
+                            <span>✓</span>
                             Generating lesson and
-                            questions
+                            topics
                         </div>
 
                         <div className="processing-item">
-                            <span className="processing-dot" />
 
-                            Creating topic
-                            assessments
+                            <span>
+                                {generationProgress.completedTopics >
+                                0
+                                    ? "✓"
+                                    : (
+                                          <span className="processing-dot" />
+                                      )}
+                            </span>
+
+                            Generating questions
+                            per topic
+
                         </div>
 
                         <div className="processing-item">
-                            <span className="processing-dot" />
 
-                            Saving lesson
-                            to database
+                            <span>
+                                {generationProgress.currentTopicName ===
+                                "Creating assessments..."
+                                    ? "✓"
+                                    : (
+                                          <span className="processing-dot" />
+                                      )}
+                            </span>
+
+                            Generating assessments
+
                         </div>
 
                     </div>
@@ -1262,7 +2348,7 @@ const GenerateLesson = ({
                         </span>
 
                         <span>
-                            Total:{" "}
+                            Per Topic:{" "}
                             <strong>
                                 {
                                     easyQuestions +
@@ -1273,11 +2359,12 @@ const GenerateLesson = ({
                         </span>
 
                     </div>
+
                 </div>
             )}
 
             {/* ==================================================
-                STEP 4 — PREVIEW
+                STEP 4
             ================================================== */}
 
             {step === "preview" &&
@@ -1295,11 +2382,13 @@ const GenerateLesson = ({
                             </h2>
 
                             <p>
-                                The lesson has
-                                already been
-                                generated and saved
-                                to the database.
+                                The lesson, topics,
+                                questions, and
+                                assessments have
+                                been generated and
+                                saved to the database.
                             </p>
+
                         </div>
 
                         <div className="lesson-preview">
@@ -1320,9 +2409,23 @@ const GenerateLesson = ({
                                 }
                             </p>
 
-                            {/* ==================================================
-                                TOPICS
-                            ================================================== */}
+                            <div className="preview-topics">
+
+                                <h3>
+                                    Assignment
+                                </h3>
+
+                                <p>
+                                    Lesson assigned to
+                                    user ID{" "}
+                                    <strong>
+                                        {
+                                            generatedLesson.assignedUserId
+                                        }
+                                    </strong>
+                                </p>
+
+                            </div>
 
                             <div className="preview-topics">
 
@@ -1366,20 +2469,11 @@ const GenerateLesson = ({
                                                     </p>
 
                                                     <small>
+                                                        ✓{" "}
                                                         {
-                                                            topic.questions
-                                                                ?.length ||
-                                                            0
+                                                            topic.questionCount
                                                         }{" "}
-                                                        practice
-                                                        questions
-                                                        {" • "}
-                                                        {topic.assessment
-                                                            ?.questions
-                                                            ?.length ||
-                                                            0}{" "}
-                                                        assessment
-                                                        questions
+                                                        questions generated
                                                     </small>
 
                                                 </div>
@@ -1411,15 +2505,13 @@ const GenerateLesson = ({
 
                                     </div>
                                 )}
-                            </div>
 
-                            {/* ==================================================
-                                QUESTION SUMMARY
-                            ================================================== */}
+                            </div>
 
                             <div className="question-summary">
 
                                 <div>
+
                                     <strong>
                                         {
                                             generatedLesson
@@ -1429,11 +2521,13 @@ const GenerateLesson = ({
                                     </strong>
 
                                     <span>
-                                        Easy
+                                        Easy / Topic
                                     </span>
+
                                 </div>
 
                                 <div>
+
                                     <strong>
                                         {
                                             generatedLesson
@@ -1443,11 +2537,13 @@ const GenerateLesson = ({
                                     </strong>
 
                                     <span>
-                                        Medium
+                                        Medium / Topic
                                     </span>
+
                                 </div>
 
                                 <div>
+
                                     <strong>
                                         {
                                             generatedLesson
@@ -1457,28 +2553,49 @@ const GenerateLesson = ({
                                     </strong>
 
                                     <span>
-                                        Hard
+                                        Hard / Topic
                                     </span>
+
                                 </div>
 
                                 <div>
+
                                     <strong>
                                         {
                                             generatedLesson
-                                                .totalQuestions
+                                                .questions
+                                                ?.easy +
+                                            generatedLesson
+                                                .questions
+                                                ?.medium +
+                                            generatedLesson
+                                                .questions
+                                                ?.hard
                                         }
                                     </strong>
 
                                     <span>
-                                        Total
+                                        Per Topic
                                     </span>
+
+                                </div>
+
+                                <div>
+
+                                    <strong>
+                                        {
+                                            generatedLesson
+                                                .totalQuestionsAllTopics
+                                        }
+                                    </strong>
+
+                                    <span>
+                                        All Topics
+                                    </span>
+
                                 </div>
 
                             </div>
-
-                            {/* ==================================================
-                                ASSESSMENTS
-                            ================================================== */}
 
                             <div className="preview-topics">
 
@@ -1501,13 +2618,57 @@ const GenerateLesson = ({
                                     generated.
                                 </p>
 
+                                {generatedLesson
+                                    .assessments
+                                    ?.length > 0 && (
+                                    <div
+                                        style={{
+                                            marginTop:
+                                                "12px",
+                                        }}
+                                    >
+                                        {generatedLesson.assessments.map(
+                                            (
+                                                assessment,
+                                                index
+                                            ) => (
+                                                <div
+                                                    key={
+                                                        assessment.id ||
+                                                        index
+                                                    }
+                                                    className="preview-topic"
+                                                >
+                                                    <span>
+                                                        {
+                                                            index +
+                                                            1
+                                                        }
+                                                    </span>
+
+                                                    <div>
+                                                        <strong>
+                                                            {
+                                                                assessment.title
+                                                            }
+                                                        </strong>
+
+                                                        <p>
+                                                            {
+                                                                assessment.total_questions
+                                                            }{" "}
+                                                            questions
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            )
+                                        )}
+                                    </div>
+                                )}
+
                             </div>
 
                         </div>
-
-                        {/* ==================================================
-                            ACTIONS
-                        ================================================== */}
 
                         <div className="generator-actions">
 
@@ -1542,8 +2703,10 @@ const GenerateLesson = ({
                             </button>
 
                         </div>
+
                     </div>
                 )}
+
         </div>
     );
 };
@@ -1581,22 +2744,34 @@ const QuestionInput = ({
             event.target.value;
 
         if (rawValue === "") {
-            setValue(MIN_QUESTIONS);
+            setValue(
+                MIN_QUESTIONS
+            );
+
             return;
         }
 
         const newValue =
             Number(rawValue);
 
-        if (!Number.isFinite(newValue)) {
-            setValue(MIN_QUESTIONS);
+        if (
+            !Number.isFinite(
+                newValue
+            )
+        ) {
+            setValue(
+                MIN_QUESTIONS
+            );
+
             return;
         }
 
         setValue(
             Math.max(
                 MIN_QUESTIONS,
-                Math.floor(newValue)
+                Math.floor(
+                    newValue
+                )
             )
         );
     };
@@ -1605,6 +2780,7 @@ const QuestionInput = ({
         <div
             className={`difficulty-card ${className}`}
         >
+
             <span className="difficulty-label">
                 {label}
             </span>
@@ -1648,6 +2824,7 @@ const QuestionInput = ({
                 Minimum:{" "}
                 {MIN_QUESTIONS}
             </span>
+
         </div>
     );
 };

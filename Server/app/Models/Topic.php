@@ -11,6 +11,8 @@ class Topic extends Model
 {
     use HasFactory;
 
+    protected $table = 'topics';
+
     protected $fillable = [
         'lesson_id',
         'name',
@@ -19,21 +21,40 @@ class Topic extends Model
     ];
 
     protected $casts = [
+        'lesson_id' => 'integer',
         'topic_order' => 'integer',
     ];
 
+    // ============================================================
+    // LESSON
+    // ============================================================
+
     public function lesson(): BelongsTo
     {
-        return $this->belongsTo(Lesson::class);
+        return $this->belongsTo(
+            Lesson::class
+        );
     }
+
+    // ============================================================
+    // QUESTIONS
+    // ============================================================
 
     public function questions(): HasMany
     {
-        return $this->hasMany(Question::class);
+        return $this->hasMany(
+            Question::class
+        );
     }
+
+    // ============================================================
+    // ASSESSMENTS
+    // ============================================================
 
     public function assessments(): HasMany
     {
-        return $this->hasMany(Assessment::class);
+        return $this->hasMany(
+            Assessment::class
+        );
     }
 }

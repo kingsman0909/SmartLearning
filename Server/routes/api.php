@@ -15,19 +15,35 @@ use App\Http\Controllers\LessonController;
 // PUBLIC
 // ============================================================
 
-Route::post('/login', [AuthController::class, 'login']);
-Route::post('/register', [AuthController::class, 'register']);
+Route::post(
+    '/login',
+    [AuthController::class, 'login']
+);
+
+Route::post(
+    '/register',
+    [AuthController::class, 'register']
+);
 
 Route::get(
     '/gemini/test',
     [GeminiTestController::class, 'test']
 );
+
+
 // ============================================================
 // TOPICS
 // ============================================================
 
-Route::get('/topics', [TopicController::class, 'index']);
-Route::get('/topics/{topic}', [TopicController::class, 'show']);
+Route::get(
+    '/topics',
+    [TopicController::class, 'index']
+);
+
+Route::get(
+    '/topics/{topic}',
+    [TopicController::class, 'show']
+);
 
 
 // ============================================================
@@ -55,12 +71,21 @@ Route::middleware('auth:sanctum')->group(function () {
     // USER
     // ========================================================
 
-    Route::get('/user', function (\Illuminate\Http\Request $request) {
-        return response()->json([
-            'user' => $request->user(),
-        ]);
-    });
+    Route::get(
+        '/user',
+        function (\Illuminate\Http\Request $request) {
 
+            return response()->json([
+                'user' =>
+                    $request->user(),
+            ]);
+        }
+    );
+
+
+    // ========================================================
+    // AI LESSON GENERATION
+    // ========================================================
 
     Route::post(
         '/ai/generate-lesson',
@@ -124,19 +149,42 @@ Route::middleware('auth:sanctum')->group(function () {
     // ASSESSMENTS
     // ========================================================
 
-    // Get assessments
+    // --------------------------------------------------------
+    // Generate assessments AFTER all topic questions are done
+    // --------------------------------------------------------
+
+    Route::post(
+        '/assessments/generate',
+        [AssessmentController::class, 'generate']
+    );
+
+
+    // --------------------------------------------------------
+    // Get all assessments
+    // --------------------------------------------------------
+
     Route::get(
         '/assessments',
         [AssessmentController::class, 'index']
     );
 
+
+    // --------------------------------------------------------
     // Get one assessment
+    // IMPORTANT:
+    // This must come AFTER /assessments/generate
+    // --------------------------------------------------------
+
     Route::get(
         '/assessments/{assessment}',
         [AssessmentController::class, 'show']
     );
 
+
+    // --------------------------------------------------------
     // Submit assessment
+    // --------------------------------------------------------
+
     Route::post(
         '/assessments/{assessment}/submit',
         [AssessmentController::class, 'submit']

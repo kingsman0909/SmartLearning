@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Question extends Model
 {
@@ -29,8 +31,29 @@ class Question extends Model
         'points' => 'integer',
     ];
 
-    public function topic()
+    // ============================================================
+    // TOPIC
+    // ============================================================
+
+    public function topic(): BelongsTo
     {
-        return $this->belongsTo(Topic::class);
+        return $this->belongsTo(
+            Topic::class
+        );
+    }
+
+    // ============================================================
+    // ASSESSMENTS
+    // ============================================================
+
+    public function assessments(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Assessment::class,
+            'assessment_questions',
+            'question_id',
+            'assessment_id'
+        )
+            ->withPivot('question_order');
     }
 }

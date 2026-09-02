@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\Assessment;
 use App\Models\AssessmentAttempt;
+use App\Models\AssessmentQuestion;
+use App\Models\Topic;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -13,10 +15,10 @@ use Illuminate\Support\Facades\Log;
 class AssessmentController extends Controller
 {
     // ============================================================
-    // LIST ASSESSMENTS
+    // GENERATE ASSESSMENTS FROM LESSON TOPICS
     // ============================================================
 
-    public function index(): JsonResponse
+    public function generate(Request $request): JsonResponse
     {
         $user = Auth::user();
 
@@ -27,48 +29,255 @@ class AssessmentController extends Controller
             ], 401);
         }
 
-        $assessments = Assessment::query()
+        $validated = $request->validate([
+            'lesson_id' => [
+                'required',
+                'integer',
+                'exists:lessons,id',
+            ],
+        ]);
+
+        $lessonId = (int) $validated['lesson_id'];
+
+        Log::info('ASSESSMENT GENERATION STARTED', [
+            'lesson_id' => $lessonId,
+            'user_id' => $user->id,
+        ]);
+
+        $topics = Topic::query()
+            ->where('lesson_id', $lessonId)
             ->with([
-                'questions:id,question,choice_a,choice_b,choice_c,choice_d,correct_answer,difficulty,points,explanation'
+                'questions:id,topic_id,question,choice_a,choice_b,choice_c,choice_d,correct_answer,difficulty,points,explanation',
             ])
+            ->orderBy('topic_order')
             ->get();
 
-        $assessments->each(function ($assessment) use ($user) {
-            $this->attachAttemptData($assessment, $user);
-        });
+        if ($topics->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No topics were found for this lesson.',
+            ], 422);
+        }
 
-        return response()->json([
-            'success' => true,
-            'data' => $assessments,
-        ]);
+        $topicsWithoutQuestions = $topics
+            ->filter(
+                fn ($topic) => $topic->questions->isEmpty()
+            )
+            ->values();
+
+        if ($topicsWithoutQuestions->isNotEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Some topics do not have generated questions yet.',
+                'incomplete_topics' => $topicsWithoutQuestions
+                    ->map(function ($topic) {
+                        return [
+                            'topic_id' => $topic->id,
+                            'topic_name' => $topic->name,
+                            'question_count' => 0,
+                        ];
+                    })
+                    ->values(),
+            ], 422);
+        }
+
+        try {
+            $result = DB::transaction(function () use ($topics) {
+                $assessments = [];
+                $totalQuestionsCreated = 0;
+
+                foreach ($topics as $index => $topic) {
+                    $questions = $topic
+                        ->questions
+                        ->shuffle()
+                        ->values();
+
+                    $questionCount = $questions->count();
+
+                    $totalPoints = $questions->sum(
+                        fn ($question) => (int) ($question->points ?? 1)
+                    );
+
+                    $assessment = Assessment::firstOrNew([
+                        'topic_id' => $topic->id,
+                    ]);
+
+                    $assessment->title =
+                        'Assessment ' .
+                        ($index + 1) .
+                        ' - ' .
+                        $topic->name;
+
+                    $assessment->description =
+                        $topic->description ??
+                        'Assessment for ' . $topic->name;
+
+                    $assessment->total_questions = $questionCount;
+                    $assessment->total_points = $totalPoints;
+
+                    $assessment->save();
+
+                    // Remove old question links when regenerating.
+                    AssessmentQuestion::query()
+                        ->where(
+                            'assessment_id',
+                            $assessment->id
+                        )
+                        ->delete();
+
+                    $pivotRows = [];
+
+                    foreach ($questions as $questionIndex => $question) {
+                        $pivotRows[] = [
+                            'assessment_id' => $assessment->id,
+                            'question_id' => $question->id,
+                            'question_order' => $questionIndex + 1,
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ];
+                    }
+
+                    if (!empty($pivotRows)) {
+                        AssessmentQuestion::insert($pivotRows);
+                    }
+
+                    $assessments[] = [
+                        'id' => $assessment->id,
+                        'assessment_number' => $index + 1,
+                        'topic_id' => $topic->id,
+                        'topic_name' => $topic->name,
+                        'title' => $assessment->title,
+                        'description' => $assessment->description,
+                        'total_questions' => $questionCount,
+                        'total_points' => $totalPoints,
+                    ];
+
+                    $totalQuestionsCreated += $questionCount;
+                }
+
+                return [
+                    'assessments' => $assessments,
+                    'total_assessments' => count($assessments),
+                    'total_questions' => $totalQuestionsCreated,
+                ];
+            });
+
+            Log::info('ASSESSMENT GENERATION COMPLETED', [
+                'lesson_id' => $lessonId,
+                'user_id' => $user->id,
+                'total_assessments' => $result['total_assessments'],
+                'total_questions' => $result['total_questions'],
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Assessments generated successfully.',
+                'lesson_id' => $lessonId,
+                'total_assessments' => $result['total_assessments'],
+                'total_questions' => $result['total_questions'],
+                'data' => $result['assessments'],
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('ASSESSMENT GENERATION FAILED', [
+                'lesson_id' => $lessonId,
+                'user_id' => $user->id,
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to generate assessments.',
+                'error' => config('app.debug')
+                    ? $e->getMessage()
+                    : null,
+            ], 500);
+        }
     }
 
 
     // ============================================================
-    // SHOW SINGLE ASSESSMENT
+    // GET ALL ASSESSMENTS
     // ============================================================
 
-    public function show(Assessment $assessment): JsonResponse
+    public function index(Request $request): JsonResponse
     {
-        $user = Auth::user();
+        try {
+            $assessments = Assessment::query()
+                ->with([
+                    'topic',
+                    'questions',
+                ])
+                ->orderBy('topic_id')
+                ->get();
 
-        if (!$user) {
+            $assessments = $assessments->map(
+                function ($assessment) {
+                    return $this->attachAttemptData($assessment);
+                }
+            );
+
+            return response()->json([
+                'success' => true,
+                'data' => $assessments,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('ASSESSMENT INDEX FAILED', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+
             return response()->json([
                 'success' => false,
-                'message' => 'Unauthenticated.',
-            ], 401);
+                'message' => 'Failed to load assessments.',
+                'error' => config('app.debug')
+                    ? $e->getMessage()
+                    : null,
+            ], 500);
         }
+    }
 
-        $assessment->load([
-            'questions:id,question,choice_a,choice_b,choice_c,choice_d,correct_answer,difficulty,points,explanation'
-        ]);
 
-        $this->attachAttemptData($assessment, $user);
+    // ============================================================
+    // GET ONE ASSESSMENT
+    // ============================================================
 
-        return response()->json([
-            'success' => true,
-            'data' => $assessment,
-        ]);
+    public function show(
+        Request $request,
+        Assessment $assessment
+    ): JsonResponse {
+        try {
+            $assessment->load([
+                'topic',
+                'questions',
+            ]);
+
+            $assessment = $this->attachAttemptData(
+                $assessment
+            );
+
+            return response()->json([
+                'success' => true,
+                'data' => $assessment,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('ASSESSMENT SHOW FAILED', [
+                'assessment_id' => $assessment->id,
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to load assessment.',
+                'error' => config('app.debug')
+                    ? $e->getMessage()
+                    : null,
+            ], 500);
+        }
     }
 
 
@@ -80,352 +289,444 @@ class AssessmentController extends Controller
         Request $request,
         Assessment $assessment
     ): JsonResponse {
+        try {
+            $user = Auth::user();
 
-        $user = Auth::user();
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated.',
+                ], 401);
+            }
 
-        if (!$user) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthenticated.',
-            ], 401);
-        }
+            // ----------------------------------------------------
+            // LOAD QUESTIONS
+            // ----------------------------------------------------
 
-        Log::info('ASSESSMENT SUBMIT HIT', [
-            'assessment_id' => $assessment->id,
-            'user_id' => $user->id,
-            'answers' => $request->all(),
-        ]);
+            $assessment->load([
+                'questions' => function ($query) {
+                    $query->orderBy(
+                        'assessment_questions.question_order'
+                    );
+                },
+            ]);
 
-        // ========================================================
-        // VALIDATION
-        // ========================================================
+            $questions = $assessment->questions;
 
-        $validated = $request->validate([
-            'answers' => [
-                'required',
-                'array',
-                'min:1',
-            ],
+            if ($questions->isEmpty()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'This assessment has no questions.',
+                ], 422);
+            }
 
-            'answers.*.question_id' => [
-                'required',
-                'integer',
-            ],
+            // ----------------------------------------------------
+            // CHECK PREVIOUS ATTEMPT
+            // ----------------------------------------------------
+            //
+            // If already passed, the assessment is permanently
+            // locked for this user.
+            //
+            // Failed assessments can be retaken.
+            // ----------------------------------------------------
 
-            'answers.*.answer' => [
-                'required',
-                'string',
-                'in:A,B,C,D',
-            ],
-        ]);
+            $latestAttempt = AssessmentAttempt::query()
+                ->where(
+                    'assessment_id',
+                    $assessment->id
+                )
+                ->where(
+                    'user_id',
+                    $user->id
+                )
+                ->latest('attempt_number')
+                ->first();
 
-        // ========================================================
-        // LOAD QUESTIONS THROUGH PIVOT
-        // ========================================================
+            if (
+                $latestAttempt &&
+                $latestAttempt->status === 'passed'
+            ) {
+                return response()->json([
+                    'success' => false,
+                    'message' =>
+                        'This assessment has already been passed and is locked.',
+                    'locked' => true,
+                    'passed' => true,
+                    'score' => (float) $latestAttempt->score,
+                    'attempt_number' =>
+                        $latestAttempt->attempt_number,
+                ], 403);
+            }
 
-        $assessment->load([
-            'questions:id,question,choice_a,choice_b,choice_c,choice_d,correct_answer,difficulty,points,explanation'
-        ]);
+            // ----------------------------------------------------
+            // GET SUBMITTED ANSWERS
+            // ----------------------------------------------------
 
-        $questions = $assessment->questions;
+            $submittedAnswers =
+                $request->input('answers');
 
-        if ($questions->isEmpty()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'This assessment has no questions.',
-            ], 400);
-        }
+            if (!is_array($submittedAnswers)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid answers format.',
+                ], 422);
+            }
 
-        $totalQuestions = $questions->count();
+            // ----------------------------------------------------
+            // NORMALIZE ANSWERS
+            // ----------------------------------------------------
 
-        // ========================================================
-        // QUESTION IDS BELONGING TO THIS ASSESSMENT
-        // ========================================================
+            $answersByQuestionId = [];
 
-        $questionIds = $questions
-            ->pluck('id')
-            ->map(fn ($id) => (int) $id)
-            ->values();
+            foreach ($submittedAnswers as $key => $value) {
 
-        // ========================================================
-        // LATEST ATTEMPT
-        // ========================================================
+                // -----------------------------------------------
+                // OBJECT FORMAT
+                // -----------------------------------------------
+                //
+                // [
+                //     [
+                //         'question_id' => 123,
+                //         'answer' => 'B'
+                //     ]
+                // ]
+                // -----------------------------------------------
 
-        $latestAttempt = AssessmentAttempt::query()
-            ->where('user_id', $user->id)
-            ->where('assessment_id', $assessment->id)
-            ->orderByDesc('attempt_number')
-            ->first();
+                if (is_array($value)) {
+                    $questionId =
+                        $value['question_id']
+                        ?? $value['questionId']
+                        ?? $value['id']
+                        ?? null;
 
-        // ========================================================
-        // PASSED = LOCKED
-        // ========================================================
+                    $answer =
+                        $value['answer']
+                        ?? $value['selected_answer']
+                        ?? $value['selectedAnswer']
+                        ?? $value['user_answer']
+                        ?? $value['userAnswer']
+                        ?? null;
 
-        if (
-            $latestAttempt &&
-            $latestAttempt->status === 'passed'
-        ) {
-            return response()->json([
-                'success' => false,
-                'message' => 'You have already passed this assessment.',
-                'locked' => true,
-                'status' => 'passed',
-                'score' => (float) $latestAttempt->score,
-                'correct' => (int) $latestAttempt->correct,
-                'total' => (int) $latestAttempt->total,
-                'attempt_number' => (int) $latestAttempt->attempt_number,
-            ], 409);
-        }
+                    if (
+                        $questionId !== null &&
+                        $answer !== null
+                    ) {
+                        $answersByQuestionId[
+                            (int) $questionId
+                        ] = strtoupper(
+                            trim((string) $answer)
+                        );
+                    }
 
-        // ========================================================
-        // FORMAT SUBMITTED ANSWERS
-        // ========================================================
+                    continue;
+                }
 
-        $submittedAnswers = collect($validated['answers'])
-            ->keyBy(function ($answer) {
-                return (int) $answer['question_id'];
-            });
+                // -----------------------------------------------
+                // ASSOCIATIVE FORMAT
+                // -----------------------------------------------
 
-        // ========================================================
-        // CHECK QUESTION OWNERSHIP
-        // ========================================================
+                if (
+                    is_string($key) &&
+                    is_numeric($key)
+                ) {
+                    $answersByQuestionId[
+                        (int) $key
+                    ] = strtoupper(
+                        trim((string) $value)
+                    );
+                }
+            }
 
-        foreach ($submittedAnswers as $questionId => $answerData) {
+            // ----------------------------------------------------
+            // REQUIRED QUESTION IDS
+            // ----------------------------------------------------
 
-            if (!$questionIds->contains((int) $questionId)) {
+            $requiredQuestionIds = $questions
+                ->pluck('id')
+                ->map(
+                    fn ($id) => (int) $id
+                )
+                ->values();
+
+            // ----------------------------------------------------
+            // CHECK MISSING ANSWERS
+            // ----------------------------------------------------
+
+            $missingQuestionIds =
+                $requiredQuestionIds
+                    ->filter(
+                        fn ($id) =>
+                            !array_key_exists(
+                                $id,
+                                $answersByQuestionId
+                            )
+                            ||
+                            empty(
+                                $answersByQuestionId[$id]
+                            )
+                    )
+                    ->values();
+
+            if ($missingQuestionIds->isNotEmpty()) {
+                Log::warning(
+                    'Assessment submission missing answers',
+                    [
+                        'assessment_id' =>
+                            $assessment->id,
+
+                        'user_id' =>
+                            $user->id,
+
+                        'required_question_ids' =>
+                            $requiredQuestionIds->toArray(),
+
+                        'received_question_ids' =>
+                            array_keys(
+                                $answersByQuestionId
+                            ),
+
+                        'missing_question_ids' =>
+                            $missingQuestionIds->toArray(),
+                    ]
+                );
 
                 return response()->json([
                     'success' => false,
                     'message' =>
-                        "Question {$questionId} does not belong to this assessment.",
+                        'Please answer all questions before submitting the assessment.',
+                    'required' =>
+                        $requiredQuestionIds->count(),
+                    'received' =>
+                        count($answersByQuestionId),
+                    'missing_question_ids' =>
+                        $missingQuestionIds->toArray(),
                 ], 422);
             }
-        }
 
-        // ========================================================
-        // REQUIRE ALL QUESTIONS
-        // ========================================================
+            // ----------------------------------------------------
+            // CALCULATE SCORE
+            // ----------------------------------------------------
 
-        if ($submittedAnswers->count() !== $totalQuestions) {
+            $correctAnswers = 0;
+            $totalQuestions = $questions->count();
 
-            return response()->json([
-                'success' => false,
-                'message' =>
-                    'You must answer all questions before submitting.',
-            ], 422);
-        }
+            foreach ($questions as $question) {
+                $questionId = (int) $question->id;
 
-        // ========================================================
-        // CALCULATE SCORE
-        // ========================================================
+                $submittedAnswer =
+                    $answersByQuestionId[$questionId]
+                    ?? null;
 
-        $correct = 0;
-
-        foreach ($questions as $question) {
-
-            $submitted = $submittedAnswers->get(
-                (int) $question->id
-            );
-
-            $selectedAnswer = strtoupper(
-                trim($submitted['answer'] ?? '')
-            );
-
-            $correctAnswer = strtoupper(
-                trim($question->correct_answer ?? '')
-            );
-
-            if (
-                $selectedAnswer !== '' &&
-                $selectedAnswer === $correctAnswer
-            ) {
-                $correct++;
-            }
-        }
-
-        // ========================================================
-        // SCORE
-        // ========================================================
-
-        $score = round(
-            ($correct / $totalQuestions) * 100,
-            2
-        );
-
-        // ========================================================
-        // PASSING RULE
-        // ========================================================
-
-        $passingPercentage = 60;
-
-        $passed = $score >= $passingPercentage;
-
-        $status = $passed
-            ? 'passed'
-            : 'failed';
-
-        // ========================================================
-        // POINTS
-        // ========================================================
-
-        $pointsEarned = $passed
-            ? $correct
-            : 0;
-
-        // ========================================================
-        // ATTEMPT NUMBER
-        // ========================================================
-
-        $lastAttemptNumber = AssessmentAttempt::query()
-            ->where('user_id', $user->id)
-            ->where('assessment_id', $assessment->id)
-            ->max('attempt_number');
-
-        $attemptNumber = ((int) $lastAttemptNumber) + 1;
-
-        // ========================================================
-        // SAVE ATTEMPT + UPDATE USER PROGRESS
-        // ========================================================
-
-        try {
-
-            $attempt = DB::transaction(function () use (
-                $assessment,
-                $user,
-                $attemptNumber,
-                $correct,
-                $totalQuestions,
-                $score,
-                $status,
-                $pointsEarned
-            ) {
-
-                Log::info('CREATING ASSESSMENT ATTEMPT', [
-                    'assessment_id' => $assessment->id,
-                    'user_id' => $user->id,
-                    'attempt_number' => $attemptNumber,
-                    'correct' => $correct,
-                    'total' => $totalQuestions,
-                    'score' => $score,
-                    'status' => $status,
-                ]);
-
-                // ------------------------------------------------
-                // CREATE ASSESSMENT ATTEMPT
-                // ------------------------------------------------
-
-                $attempt = AssessmentAttempt::create([
-                    'assessment_id' => $assessment->id,
-                    'user_id' => $user->id,
-                    'attempt_number' => $attemptNumber,
-                    'correct' => $correct,
-                    'total' => $totalQuestions,
-                    'score' => $score,
-                    'status' => $status,
-                ]);
-
-                Log::info('ASSESSMENT ATTEMPT CREATED', [
-                    'attempt_id' => $attempt->id,
-                ]);
-
-                // ------------------------------------------------
-                // UPDATE USER GLOBAL PROGRESS
-                // ------------------------------------------------
-
-                $user->total_score =
-                    ($user->total_score ?? 0)
-                    + $pointsEarned;
-
-                $user->questions_answered =
-                    ($user->questions_answered ?? 0)
-                    + $totalQuestions;
-
-                $user->questions_correct =
-                    ($user->questions_correct ?? 0)
-                    + $correct;
-
-                // ------------------------------------------------
-                // SUCCESS RATE
-                // ------------------------------------------------
-
-                $answered =
-                    (int) $user->questions_answered;
-
-                $correctTotal =
-                    (int) $user->questions_correct;
-
-                $user->success_rate =
-                    $answered > 0
-                        ? round(
-                            ($correctTotal / $answered) * 100,
-                            2
-                        )
-                        : 0;
-
-                // ------------------------------------------------
-                // LEVEL
-                // ------------------------------------------------
-
-                $user->level = $this->calculateLevel(
-                    (int) $user->total_score
+                $correctAnswer = strtoupper(
+                    trim(
+                        (string) $question->correct_answer
+                    )
                 );
 
-                $user->save();
+                if (
+                    $submittedAnswer !== null &&
+                    $submittedAnswer === $correctAnswer
+                ) {
+                    $correctAnswers++;
+                }
+            }
 
-                return $attempt;
-            });
+            // ----------------------------------------------------
+            // SCORE
+            // ----------------------------------------------------
+            //
+            // Score is based on number of correct answers.
+            //
+            // Example:
+            // 3 / 3 = 100%
+            // 2 / 3 = 66.67%
+            // 1 / 3 = 33.33%
+            // ----------------------------------------------------
 
-        } catch (\Throwable $e) {
+            $score = $totalQuestions > 0
+                ? round(
+                    ($correctAnswers / $totalQuestions) * 100,
+                    2
+                )
+                : 0;
 
-            Log::error('ASSESSMENT SUBMISSION FAILED', [
-                'message' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'assessment_id' => $assessment->id,
-                'user_id' => $user->id,
+            // ----------------------------------------------------
+            // PASSING SCORE
+            // ----------------------------------------------------
+
+            $passed = $score >= 60;
+
+            $status = $passed
+                ? 'passed'
+                : 'failed';
+
+            // ----------------------------------------------------
+            // ATTEMPT NUMBER
+            // ----------------------------------------------------
+
+            $attemptNumber = AssessmentAttempt::query()
+                ->where(
+                    'assessment_id',
+                    $assessment->id
+                )
+                ->where(
+                    'user_id',
+                    $user->id
+                )
+                ->max('attempt_number');
+
+            $attemptNumber =
+                ((int) $attemptNumber) + 1;
+
+            // ----------------------------------------------------
+            // CREATE ATTEMPT
+            // ----------------------------------------------------
+
+            $attempt = DB::transaction(
+                function () use (
+                    $assessment,
+                    $user,
+                    $attemptNumber,
+                    $correctAnswers,
+                    $totalQuestions,
+                    $score,
+                    $status
+                ) {
+                    return AssessmentAttempt::create([
+                        'assessment_id' =>
+                            $assessment->id,
+
+                        'user_id' =>
+                            $user->id,
+
+                        'attempt_number' =>
+                            $attemptNumber,
+
+                        'correct' =>
+                            $correctAnswers,
+
+                        'total' =>
+                            $totalQuestions,
+
+                        'score' =>
+                            $score,
+
+                        'status' =>
+                            $status,
+                    ]);
+                }
+            );
+
+            // ----------------------------------------------------
+            // LOG
+            // ----------------------------------------------------
+
+            Log::info(
+                'ASSESSMENT SUBMITTED SUCCESSFULLY',
+                [
+                    'assessment_id' =>
+                        $assessment->id,
+
+                    'user_id' =>
+                        $user->id,
+
+                    'attempt_id' =>
+                        $attempt->id,
+
+                    'attempt_number' =>
+                        $attemptNumber,
+
+                    'correct' =>
+                        $correctAnswers,
+
+                    'total' =>
+                        $totalQuestions,
+
+                    'score' =>
+                        $score,
+
+                    'status' =>
+                        $status,
+                ]
+            );
+
+            // ----------------------------------------------------
+            // RESPONSE
+            // ----------------------------------------------------
+
+            return response()->json([
+                'success' => true,
+
+                'message' =>
+                    $passed
+                        ? 'Assessment passed successfully.'
+                        : 'Assessment failed. You can try again.',
+
+                'data' => [
+                    'assessment_id' =>
+                        $assessment->id,
+
+                    'attempt_id' =>
+                        $attempt->id,
+
+                    'attempt_number' =>
+                        $attemptNumber,
+
+                    'correct' =>
+                        $correctAnswers,
+
+                    'total' =>
+                        $totalQuestions,
+
+                    'score' =>
+                        $score,
+
+                    'status' =>
+                        $status,
+
+                    'passed' =>
+                        $passed,
+
+                    'locked' =>
+                        $passed,
+
+                    'can_retake' =>
+                        !$passed,
+                ],
             ]);
+        } catch (\Throwable $e) {
+            Log::error(
+                'Assessment submission failed',
+                [
+                    'assessment_id' =>
+                        $assessment->id ?? null,
+
+                    'user_id' =>
+                        Auth::id(),
+
+                    'error' =>
+                        $e->getMessage(),
+
+                    'file' =>
+                        $e->getFile(),
+
+                    'line' =>
+                        $e->getLine(),
+                ]
+            );
 
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to save assessment attempt.',
-                'error' => config('app.debug')
-                    ? $e->getMessage()
-                    : null,
+
+                'message' =>
+                    'Failed to submit assessment.',
+
+                'error' =>
+                    config('app.debug')
+                        ? $e->getMessage()
+                        : null,
             ], 500);
         }
-
-        // ========================================================
-        // PROGRESS
-        // ========================================================
-
-        $progress = $this->getProgressData($user);
-
-        // ========================================================
-        // RESPONSE
-        // ========================================================
-
-        return response()->json([
-            'success' => true,
-
-            'data' => [
-                'attempt_id' => $attempt->id,
-                'attempt_number' => $attemptNumber,
-
-                'correct' => $correct,
-                'wrong' => $totalQuestions - $correct,
-                'total' => $totalQuestions,
-
-                'score' => $score,
-
-                'passed' => $passed,
-                'status' => $status,
-                'locked' => $passed,
-
-                'points_earned' => $pointsEarned,
-
-                'progress' => $progress,
-            ],
-        ]);
     }
 
 
@@ -434,128 +735,138 @@ class AssessmentController extends Controller
     // ============================================================
 
     private function attachAttemptData(
-        Assessment $assessment,
-        $user
+        Assessment $assessment
     ): Assessment {
+        $user = Auth::user();
 
-        $totalQuestions = $assessment->questions->count();
-
-        // ========================================================
-        // NO QUESTIONS
-        // ========================================================
-
-        if ($totalQuestions === 0) {
-
-            $assessment->attempted = false;
-            $assessment->correct = 0;
-            $assessment->wrong = 0;
-            $assessment->total = 0;
-            $assessment->score = 0;
-            $assessment->status = null;
-            $assessment->locked = false;
-            $assessment->attempt_number = 0;
-
+        if (!$user) {
             return $assessment;
         }
 
-        // ========================================================
-        // LATEST ATTEMPT
-        // ========================================================
+        // --------------------------------------------------------
+        // GET LATEST ATTEMPT
+        // --------------------------------------------------------
 
-        $latestAttempt = AssessmentAttempt::query()
-            ->where('user_id', $user->id)
-            ->where('assessment_id', $assessment->id)
-            ->orderByDesc('attempt_number')
-            ->first();
+        $latestAttempt =
+            AssessmentAttempt::query()
+                ->where(
+                    'assessment_id',
+                    $assessment->id
+                )
+                ->where(
+                    'user_id',
+                    $user->id
+                )
+                ->latest('attempt_number')
+                ->first();
 
-        // ========================================================
-        // NEVER ATTEMPTED
-        // ========================================================
+        // --------------------------------------------------------
+        // NO ATTEMPT
+        // --------------------------------------------------------
 
         if (!$latestAttempt) {
-
             $assessment->attempted = false;
-            $assessment->correct = 0;
-            $assessment->wrong = 0;
-            $assessment->total = $totalQuestions;
-            $assessment->score = 0;
-            $assessment->status = null;
+            $assessment->passed = false;
             $assessment->locked = false;
+            $assessment->status = null;
+            $assessment->score = null;
             $assessment->attempt_number = 0;
+            $assessment->latest_attempt = null;
 
             return $assessment;
         }
 
-        // ========================================================
+        // --------------------------------------------------------
         // ATTEMPT EXISTS
-        // ========================================================
+        // --------------------------------------------------------
+
+        $passed =
+            $latestAttempt->status === 'passed';
 
         $assessment->attempted = true;
-
-        $assessment->correct =
-            (int) $latestAttempt->correct;
-
-        $assessment->wrong =
-            max(
-                0,
-                (int) $latestAttempt->total
-                - (int) $latestAttempt->correct
-            );
-
-        $assessment->total =
-            (int) $latestAttempt->total;
+        $assessment->passed = $passed;
+        $assessment->locked = $passed;
+        $assessment->status =
+            $latestAttempt->status;
 
         $assessment->score =
             (float) $latestAttempt->score;
 
-        $assessment->status =
-            $latestAttempt->status;
-
-        $assessment->locked =
-            $latestAttempt->status === 'passed';
-
         $assessment->attempt_number =
             (int) $latestAttempt->attempt_number;
+
+        $assessment->latest_attempt = [
+            'id' =>
+                $latestAttempt->id,
+
+            'attempt_number' =>
+                $latestAttempt->attempt_number,
+
+            'correct' =>
+                $latestAttempt->correct,
+
+            'total' =>
+                $latestAttempt->total,
+
+            'score' =>
+                (float) $latestAttempt->score,
+
+            'status' =>
+                $latestAttempt->status,
+
+            'passed' =>
+                $passed,
+
+            'locked' =>
+                $passed,
+
+            'can_retake' =>
+                !$passed,
+
+            'created_at' =>
+                $latestAttempt->created_at,
+        ];
 
         return $assessment;
     }
 
 
     // ============================================================
-    // LEVEL CALCULATOR
+    // CALCULATE LEVEL
     // ============================================================
 
-    private function calculateLevel(int $score): int
-    {
-        if ($score >= 1000) {
+    private function calculateLevel(
+        float $score
+    ): int {
+        if ($score >= 95) {
             return 10;
         }
 
-        if ($score >= 800) {
+        if ($score >= 90) {
             return 9;
         }
 
-        if ($score >= 650) {
+        if ($score >= 85) {
             return 8;
         }
 
-        if ($score >= 500) {
+        if ($score >= 80) {
             return 7;
         }
 
-        if ($score >= 400) {
+        if ($score >= 75) {
             return 6;
         }
 
-        if ($score >= 300) {
+        if ($score >= 70) {
             return 5;
         }
 
-        if ($score >= 200) {
+        if ($score >= 65) {
             return 4;
         }
 
-        if ($score >= 100) {
+        if ($score >= 60) {
             return 3;
         }
 
@@ -568,39 +879,114 @@ class AssessmentController extends Controller
 
 
     // ============================================================
-    // PROGRESS DATA
+    // GET PROGRESS DATA
     // ============================================================
 
-    private function getProgressData($user): array
-    {
-        $score =
-            (int) ($user->total_score ?? 0);
+    private function getProgressData(
+        $user
+    ): array {
+        $attempts =
+            AssessmentAttempt::query()
+                ->where(
+                    'user_id',
+                    $user->id
+                )
+                ->get();
 
-        $correct =
-            (int) ($user->questions_correct ?? 0);
+        if ($attempts->isEmpty()) {
+            return [
+                'total_assessments' => 0,
+                'completed_assessments' => 0,
+                'passed_assessments' => 0,
+                'failed_assessments' => 0,
+                'total_correct' => 0,
+                'total_wrong' => 0,
+                'average_score' => 0,
+                'level' => 1,
+            ];
+        }
 
-        $answered =
-            (int) ($user->questions_answered ?? 0);
+        $completedAssessments =
+            $attempts->count();
 
-        $wrong =
-            max(
-                0,
-                $answered - $correct
+        $passedAssessments =
+            $attempts
+                ->where(
+                    'status',
+                    'passed'
+                )
+                ->count();
+
+        $failedAssessments =
+            $attempts
+                ->where(
+                    'status',
+                    'failed'
+                )
+                ->count();
+
+        $totalCorrect =
+            $attempts->sum(
+                fn ($attempt) =>
+                    (int) (
+                        $attempt->correct ?? 0
+                    )
             );
 
-        $successRate =
-            (float) ($user->success_rate ?? 0);
+        $totalWrong =
+            $attempts->sum(
+                fn ($attempt) =>
+                    max(
+                        0,
+                        (int) (
+                            $attempt->total ?? 0
+                        ) -
+                        (int) (
+                            $attempt->correct ?? 0
+                        )
+                    )
+            );
+
+        $averageScore =
+            round(
+                $attempts->avg(
+                    fn ($attempt) =>
+                        (float) (
+                            $attempt->score ?? 0
+                        )
+                ),
+                2
+            );
 
         $level =
-            (int) ($user->level ?? 1);
+            $this->calculateLevel(
+                $averageScore
+            );
 
         return [
-            'score' => $score,
-            'correct' => $correct,
-            'wrong' => $wrong,
-            'totalAnswered' => $answered,
-            'successRate' => $successRate,
-            'level' => "Level {$level}",
+            'total_assessments' =>
+                $completedAssessments,
+
+            'completed_assessments' =>
+                $completedAssessments,
+
+            'passed_assessments' =>
+                $passedAssessments,
+
+            'failed_assessments' =>
+                $failedAssessments,
+
+            'total_correct' =>
+                $totalCorrect,
+
+            'total_wrong' =>
+                $totalWrong,
+
+            'average_score' =>
+                $averageScore,
+
+            'level' =>
+                $level,
         ];
     }
 }
