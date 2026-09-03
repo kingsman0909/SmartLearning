@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Lesson;
 use App\Models\LessonAssignment;
+use App\Models\Question;
 use App\Models\Topic;
 use App\Services\GroqService;
 use Illuminate\Http\Request;
@@ -25,23 +26,28 @@ class AiLessonController extends Controller
     private const PDF_MAX_CHARS = 60000;
 
     /*
-     * One AI request can generate all difficulties for one topic.
+     * Keep AI batches small.
+     * This is intentionally 10 because the frontend requests
+     * 10 easy + 10 medium + 10 hard by default.
      */
-    private const DEFAULT_BATCH_SIZE = 10;
-
     private const MAX_BATCH_SIZE = 10;
 
-    private const MAX_GENERATION_ATTEMPTS = 3;
+    /*
+     * Retry malformed/invalid AI output once.
+     *
+     * Rate limits are NOT retried here.
+     * GroqService handles provider/model-level retry/fallback.
+     */
+    private const MAX_GENERATION_ATTEMPTS = 2;
 
     /*
-     * Small delay only when a retry is needed.
+     * Small delay between controller retries.
      */
-    private const RETRY_DELAY_MS = 300;
+    private const GENERATION_RETRY_DELAY_MS = 1200;
 
     /*
     |--------------------------------------------------------------------------
     | STAGE 1
-    |--------------------------------------------------------------------------
     | PDF -> Lesson + Topics + Assignment
     |--------------------------------------------------------------------------
     */
@@ -56,6 +62,8 @@ class AiLessonController extends Controller
             'easy_questions' => $request->input('easy_questions'),
             'medium_questions' => $request->input('medium_questions'),
             'hard_questions' => $request->input('hard_questions'),
+            'model' => $groq->getModel(),
+            'provider' => $groq->getProvider(),
         ]);
 
         $validator = Validator::make(
@@ -113,10 +121,16 @@ class AiLessonController extends Controller
 
         $validated = $validator->validated();
 
+        $easy = (int) $validated['easy_questions'];
+        $medium = (int) $validated['medium_questions'];
+        $hard = (int) $validated['hard_questions'];
+
+        $total = $easy + $medium + $hard;
+
         try {
             /*
             |--------------------------------------------------------------------------
-            | 1. Extract PDF
+            | Validate PDF
             |--------------------------------------------------------------------------
             */
 
@@ -127,6 +141,12 @@ class AiLessonController extends Controller
                     'The uploaded PDF is invalid or could not be read.'
                 );
             }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Extract PDF
+            |--------------------------------------------------------------------------
+            */
 
             $parser = new Parser();
 
@@ -141,12 +161,6 @@ class AiLessonController extends Controller
                     'Unable to extract readable text from the PDF.'
                 );
             }
-
-            /*
-            |--------------------------------------------------------------------------
-            | Normalize whitespace
-            |--------------------------------------------------------------------------
-            */
 
             $content = preg_replace(
                 '/\s+/u',
@@ -164,11 +178,13 @@ class AiLessonController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | 2. Limit material sent to AI
+            | Limit PDF context
             |--------------------------------------------------------------------------
             */
 
-            if (mb_strlen($content) > self::PDF_MAX_CHARS) {
+            $originalCharCount = mb_strlen($content);
+
+            if ($originalCharCount > self::PDF_MAX_CHARS) {
                 $content = mb_substr(
                     $content,
                     0,
@@ -176,17 +192,18 @@ class AiLessonController extends Controller
                 );
 
                 Log::info(
-                    'PDF content truncated before AI generation.',
+                    'PDF CONTENT TRUNCATED BEFORE AI GENERATION',
                     [
-                        'max_chars' =>
-                            self::PDF_MAX_CHARS,
+                        'original_chars' => $originalCharCount,
+                        'sent_chars' => mb_strlen($content),
+                        'max_chars' => self::PDF_MAX_CHARS,
                     ]
                 );
             }
 
             /*
             |--------------------------------------------------------------------------
-            | 3. Determine lesson title
+            | Lesson title
             |--------------------------------------------------------------------------
             */
 
@@ -194,15 +211,14 @@ class AiLessonController extends Controller
                 $validated['lesson_title'] ?? ''
             );
 
-            if ($requestedTitle !== '') {
-                $lessonTitle = $requestedTitle;
-            } else {
-                $lessonTitle = 'AI Generated Lesson';
-            }
+            $lessonTitle =
+                $requestedTitle !== ''
+                    ? $requestedTitle
+                    : 'AI Generated Lesson';
 
             /*
             |--------------------------------------------------------------------------
-            | 4. Generate lesson + topics
+            | Generate lesson + topics
             |--------------------------------------------------------------------------
             */
 
@@ -224,14 +240,14 @@ Return ONLY valid JSON.
 Required JSON structure:
 
 {
-  "title": "string",
-  "description": "string",
-  "topics": [
-    {
-      "name": "string",
-      "description": "string"
-    }
-  ]
+    "title": "string",
+    "description": "string",
+    "topics": [
+        {
+            "name": "string",
+            "description": "string"
+        }
+    ]
 }
 
 STRICT RULES:
@@ -246,24 +262,26 @@ STRICT RULES:
 - Do not use markdown.
 - Do not include extra JSON fields.
 - Do not include text outside JSON.
+- Return complete valid JSON.
+- Properly close every JSON object and array.
 
 Requested lesson title:
+
 {$lessonTitle}
 
 Learning material:
+
 {$content}
 PROMPT;
 
             $startTime = microtime(true);
 
-            $result = $groq->generateJson(
-                $prompt,
-                1400
-            );
+            $result = $groq->generateJson($prompt);
 
             $durationMs = (int) round(
                 (
-                    microtime(true) - $startTime
+                    microtime(true) -
+                    $startTime
                 ) * 1000
             );
 
@@ -272,12 +290,13 @@ PROMPT;
                 [
                     'duration_ms' => $durationMs,
                     'model' => $groq->getModel(),
+                    'provider' => $groq->getProvider(),
                 ]
             );
 
             /*
             |--------------------------------------------------------------------------
-            | 5. Validate AI result
+            | Validate AI result
             |--------------------------------------------------------------------------
             */
 
@@ -322,7 +341,6 @@ PROMPT;
             */
 
             $cleanTopics = [];
-
             $seenTopicNames = [];
 
             foreach ($topics as $topicData) {
@@ -332,13 +350,15 @@ PROMPT;
 
                 $topicName = trim(
                     (string) (
-                        $topicData['name'] ?? ''
+                        $topicData['name']
+                        ?? ''
                     )
                 );
 
                 $topicDescription = trim(
                     (string) (
-                        $topicData['description'] ?? ''
+                        $topicData['description']
+                        ?? ''
                     )
                 );
 
@@ -376,20 +396,19 @@ PROMPT;
             }
 
             if (
-                count($cleanTopics) < 3
-                ||
+                count($cleanTopics) < 3 ||
                 count($cleanTopics) > 8
             ) {
                 throw new RuntimeException(
-                    'AI must generate between 3 and 8 valid topics. '
-                    . 'Generated: '
-                    . count($cleanTopics)
+                    'AI must generate between 3 and 8 valid topics. ' .
+                    'Generated: ' .
+                    count($cleanTopics)
                 );
             }
 
             /*
             |--------------------------------------------------------------------------
-            | 6. Save atomically
+            | Save atomically
             |--------------------------------------------------------------------------
             */
 
@@ -407,12 +426,15 @@ PROMPT;
                         'description' => $description,
                     ]);
 
-                    foreach ($cleanTopics as $topicData) {
+                    foreach (
+                        $cleanTopics
+                        as $index => $topicData
+                    ) {
                         Topic::create([
                             'lesson_id' => $lesson->id,
                             'name' => $topicData['name'],
-                            'description' =>
-                                $topicData['description'],
+                            'description' => $topicData['description'],
+                            'topic_order' => $index + 1,
                         ]);
                     }
 
@@ -432,104 +454,74 @@ PROMPT;
 
             $lesson->load('topics');
 
-            /*
-            |--------------------------------------------------------------------------
-            | 7. Question configuration
-            |--------------------------------------------------------------------------
-            */
-
-            $easy = (int) $validated['easy_questions'];
-
-            $medium = (int) $validated['medium_questions'];
-
-            $hard = (int) $validated['hard_questions'];
-
-            $total = $easy + $medium + $hard;
-
             Log::info(
                 'AI LESSON STAGE 1 SUCCESS',
                 [
                     'lesson_id' => $lesson->id,
                     'user_id' => $userId,
-                    'topic_count' =>
-                        $lesson->topics->count(),
-                    'total_questions_per_topic' =>
-                        $total,
+                    'topic_count' => $lesson->topics->count(),
+                    'easy_questions' => $easy,
+                    'medium_questions' => $medium,
+                    'hard_questions' => $hard,
+                    'total_questions_per_topic' => $total,
+                    'batch_size' => self::MAX_BATCH_SIZE,
                 ]
             );
 
             return response()->json([
                 'success' => true,
-
                 'stage' => 'lesson_topics',
-
                 'message' =>
                     'Lesson and topics generated successfully.',
-
                 'data' => $lesson,
-
                 'assignment' => [
                     'user_id' => $userId,
                     'lesson_id' => $lesson->id,
                     'assigned_at' => now(),
                 ],
-
                 'configuration' => [
                     'easy_questions' => $easy,
                     'medium_questions' => $medium,
                     'hard_questions' => $hard,
                     'total_questions_per_topic' => $total,
+                    'batch_size' => self::MAX_BATCH_SIZE,
                 ],
             ]);
-
         } catch (Throwable $e) {
-
             Log::error(
                 'AI LESSON STAGE 1 FAILED',
                 [
                     'message' => $e->getMessage(),
-
                     'file' =>
                         $request
                             ->file('file')
                             ?->getClientOriginalName(),
-
-                    'user_id' =>
-                        $request->input('user_id'),
-
-                    'exception' =>
-                        get_class($e),
+                    'user_id' => $request->input('user_id'),
+                    'exception' => get_class($e),
+                    'model' => $groq->getModel(),
+                    'provider' => $groq->getProvider(),
                 ]
             );
 
-            $message = $e->getMessage();
+            $message = strtolower(
+                $e->getMessage()
+            );
 
             $isRateLimited =
-                str_contains(
-                    strtolower($message),
-                    'rate limit'
-                )
-                ||
-                str_contains(
-                    strtolower($message),
-                    '429'
-                );
+                str_contains($message, 'rate limit') ||
+                str_contains($message, '429') ||
+                str_contains($message, 'too many requests');
 
             return response()->json([
                 'success' => false,
-
+                'stage' => 'lesson_topics',
                 'message' =>
                     $isRateLimited
-                        ? 'The AI provider rate limit was reached. Please wait for the limit to reset and try again.'
+                        ? 'The AI provider rate limit was reached. Please wait and try again.'
                         : 'Failed to generate lesson and topics.',
-
-                'error' => $message,
-
-                'rate_limited' =>
-                    $isRateLimited,
-
+                'error' => $e->getMessage(),
+                'rate_limited' => $isRateLimited,
                 'resumable' => false,
-
             ], $isRateLimited ? 429 : 500);
         }
     }
@@ -537,20 +529,7 @@ PROMPT;
     /*
     |--------------------------------------------------------------------------
     | STAGE 2
-    |--------------------------------------------------------------------------
-    | ONE AI REQUEST PER TOPIC
-    |--------------------------------------------------------------------------
-    |
-    | Instead of:
-    |
-    |   Easy -> AI
-    |   Medium -> AI
-    |   Hard -> AI
-    |
-    | We now do:
-    |
-    |   Easy + Medium + Hard -> ONE AI request
-    |
+    | Topic -> Questions
     |--------------------------------------------------------------------------
     */
 
@@ -561,19 +540,21 @@ PROMPT;
         Log::info(
             'AI LESSON STAGE 2: START',
             [
-                'topic_id' =>
-                    $request->input('topic_id'),
-
-                'easy_questions' =>
-                    $request->input('easy_questions'),
-
-                'medium_questions' =>
-                    $request->input('medium_questions'),
-
-                'hard_questions' =>
-                    $request->input('hard_questions'),
+                'topic_id' => $request->input('topic_id'),
+                'easy_questions' => $request->input('easy_questions'),
+                'medium_questions' => $request->input('medium_questions'),
+                'hard_questions' => $request->input('hard_questions'),
+                'batch_size' => self::MAX_BATCH_SIZE,
+                'model' => $groq->getModel(),
+                'provider' => $groq->getProvider(),
             ]
         );
+
+        /*
+        |--------------------------------------------------------------------------
+        | 1. Validation
+        |--------------------------------------------------------------------------
+        */
 
         $validator = Validator::make(
             $request->all(),
@@ -617,18 +598,42 @@ PROMPT;
 
         $validated = $validator->validated();
 
-        try {
+        $topicId = (int) $validated['topic_id'];
 
+        $targets = [
+            'easy' => (int) $validated['easy_questions'],
+            'medium' => (int) $validated['medium_questions'],
+            'hard' => (int) $validated['hard_questions'],
+        ];
+
+        $totalRequested = array_sum($targets);
+
+        if ($totalRequested === 0) {
+            return response()->json([
+                'success' => true,
+                'stage' => 'topic_questions',
+                'message' =>
+                    'No questions were requested for this topic.',
+                'topic_id' => $topicId,
+                'configuration' => [
+                    'easy_questions' => 0,
+                    'medium_questions' => 0,
+                    'hard_questions' => 0,
+                    'total_questions' => 0,
+                    'batch_size' => self::MAX_BATCH_SIZE,
+                ],
+            ]);
+        }
+
+        try {
             /*
             |--------------------------------------------------------------------------
-            | 1. Load topic + lesson
+            | 2. Load topic
             |--------------------------------------------------------------------------
             */
 
             $topic = Topic::with('lesson')
-                ->findOrFail(
-                    $validated['topic_id']
-                );
+                ->findOrFail($topicId);
 
             $lesson = $topic->lesson;
 
@@ -636,48 +641,6 @@ PROMPT;
                 throw new RuntimeException(
                     'The topic does not have a valid lesson.'
                 );
-            }
-
-            /*
-            |--------------------------------------------------------------------------
-            | 2. Targets
-            |--------------------------------------------------------------------------
-            */
-
-            $targets = [
-                'easy' =>
-                    (int) $validated['easy_questions'],
-
-                'medium' =>
-                    (int) $validated['medium_questions'],
-
-                'hard' =>
-                    (int) $validated['hard_questions'],
-            ];
-
-            $totalRequested =
-                array_sum($targets);
-
-            if ($totalRequested <= 0) {
-                return response()->json([
-                    'success' => true,
-
-                    'stage' =>
-                        'topic_questions',
-
-                    'message' =>
-                        'No questions requested.',
-
-                    'data' => [
-                        'topic_id' =>
-                            $topic->id,
-
-                        'topic_name' =>
-                            $topic->name,
-
-                        'questions' => [],
-                    ],
-                ]);
             }
 
             /*
@@ -710,12 +673,13 @@ PROMPT;
 
             /*
             |--------------------------------------------------------------------------
-            | 4. Efficient DB count helper
+            | 4. ALWAYS read actual database state
             |--------------------------------------------------------------------------
             */
 
-            $getCounts = function () use ($topic): array {
-
+            $getCounts = function () use (
+                $topic
+            ): array {
                 $counts = [
                     'easy' => 0,
                     'medium' => 0,
@@ -733,87 +697,90 @@ PROMPT;
                     ->get();
 
                 foreach ($rows as $row) {
-
-                    $difficulty =
-                        strtolower(
-                            trim(
-                                (string)
-                                    $row->difficulty
-                            )
-                        );
+                    $difficulty = strtolower(
+                        trim(
+                            (string) $row->difficulty
+                        )
+                    );
 
                     if (
-                        isset(
-                            $counts[$difficulty]
+                        array_key_exists(
+                            $difficulty,
+                            $counts
                         )
                     ) {
                         $counts[$difficulty] =
-                            (int)
-                                $row->aggregate;
+                            (int) $row->aggregate;
                     }
                 }
 
                 return $counts;
             };
 
-            $existingCounts =
-                $getCounts();
+            $calculateRemaining = static function (
+                array $targets,
+                array $counts
+            ): array {
+                return [
+                    'easy' => max(
+                        0,
+                        $targets['easy'] -
+                        $counts['easy']
+                    ),
+
+                    'medium' => max(
+                        0,
+                        $targets['medium'] -
+                        $counts['medium']
+                    ),
+
+                    'hard' => max(
+                        0,
+                        $targets['hard'] -
+                        $counts['hard']
+                    ),
+                ];
+            };
 
             /*
             |--------------------------------------------------------------------------
-            | 5. Calculate remaining
+            | 5. Initial state
             |--------------------------------------------------------------------------
             */
 
-            $calculateRemaining =
-                static function (
-                    array $targets,
-                    array $counts
-                ): array {
-                    return [
-                        'easy' => max(
-                            0,
-                            $targets['easy']
-                            -
-                            $counts['easy']
-                        ),
+            $initialCounts = $getCounts();
 
-                        'medium' => max(
-                            0,
-                            $targets['medium']
-                            -
-                            $counts['medium']
-                        ),
+            $initialRemaining = $calculateRemaining(
+                $targets,
+                $initialCounts
+            );
 
-                        'hard' => max(
-                            0,
-                            $targets['hard']
-                            -
-                            $counts['hard']
-                        ),
-                    ];
-                };
-
-            $remaining =
-                $calculateRemaining(
-                    $targets,
-                    $existingCounts
-                );
+            Log::info(
+                'AI LESSON STAGE 2: INITIAL DATABASE STATE',
+                [
+                    'topic_id' => $topicId,
+                    'existing_counts' => $initialCounts,
+                    'targets' => $targets,
+                    'remaining' => $initialRemaining,
+                    'total_current' => array_sum($initialCounts),
+                    'total_target' => $totalRequested,
+                ]
+            );
 
             /*
             |--------------------------------------------------------------------------
-            | 6. Already complete
+            | Already complete
             |--------------------------------------------------------------------------
             */
 
             if (
-                array_sum($remaining) === 0
+                array_sum($initialRemaining) === 0
             ) {
                 return $this->topicGenerationResponse(
                     $topic,
                     $targets,
-                    $existingCounts,
-                    $existingCounts,
+                    $initialCounts,
+                    $initialCounts,
                     [
                         'easy' => 0,
                         'medium' => 0,
@@ -825,60 +792,100 @@ PROMPT;
 
             /*
             |--------------------------------------------------------------------------
-            | 7. Existing question cache
+            | 6. Existing question cache
             |--------------------------------------------------------------------------
             */
 
             $existingQuestionKeys = [];
 
-            $existingQuestionTexts = $topic
-                ->questions()
-                ->select('question')
-                ->pluck('question');
+            $existingQuestionTexts =
+                $topic
+                    ->questions()
+                    ->select('question')
+                    ->pluck('question');
 
-            foreach (
-                $existingQuestionTexts
-                as $questionText
-            ) {
+            foreach ($existingQuestionTexts as $questionText) {
                 $key = $normalize(
                     (string) $questionText
                 );
 
                 if ($key !== '') {
-                    $existingQuestionKeys[
-                        $key
-                    ] = true;
+                    $existingQuestionKeys[$key] = true;
                 }
             }
 
             /*
             |--------------------------------------------------------------------------
-            | 8. Current remaining counts
+            | 7. Generation tracker
             |--------------------------------------------------------------------------
             */
 
-            $remainingEasy =
-                $remaining['easy'];
-
-            $remainingMedium =
-                $remaining['medium'];
-
-            $remainingHard =
-                $remaining['hard'];
-
-            $remainingTotal =
-                array_sum($remaining);
+            $generatedNow = [
+                'easy' => 0,
+                'medium' => 0,
+                'hard' => 0,
+            ];
 
             /*
             |--------------------------------------------------------------------------
-            | 9. ONE AI REQUEST
+            | 8. Difficulty order
             |--------------------------------------------------------------------------
             */
 
-            $prompt = <<<PROMPT
+            $difficulties = [
+                'easy',
+                'medium',
+                'hard',
+            ];
+
+            /*
+            |--------------------------------------------------------------------------
+            | 9. Generate difficulty by difficulty
+            |--------------------------------------------------------------------------
+            */
+
+            foreach (
+                $difficulties
+                as $difficulty
+            ) {
+                while (true) {
+                    /*
+                    |--------------------------------------------------------------------------
+                    | ALWAYS recalculate from DB
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $currentCounts =
+                        $getCounts();
+
+                    $remaining =
+                        $calculateRemaining(
+                            $targets,
+                            $currentCounts
+                        );
+
+                    $remainingForDifficulty =
+                        $remaining[$difficulty];
+
+                    if ($remainingForDifficulty <= 0) {
+                        break;
+                    }
+
+                    $batchSize = min(
+                        self::MAX_BATCH_SIZE,
+                        $remainingForDifficulty
+                    );
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Question prompt
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $prompt = <<<PROMPT
 You are an expert educational assessment writer.
 
-Generate NEW multiple-choice questions for the topic below.
+Generate exactly {$batchSize} NEW multiple-choice questions.
 
 LESSON:
 {$lesson->title}
@@ -892,708 +899,660 @@ TOPIC:
 TOPIC DESCRIPTION:
 {$topic->description}
 
-REQUIRED QUESTIONS:
+REQUIRED DIFFICULTY:
+{$difficulty}
 
-Easy: {$remainingEasy}
-Medium: {$remainingMedium}
-Hard: {$remainingHard}
+NUMBER OF QUESTIONS:
+{$batchSize}
 
-TOTAL QUESTIONS:
-{$remainingTotal}
+RULES:
 
-STRICT RULES:
-
-- Generate exactly the requested number for each difficulty whenever possible.
-- Never generate more than the requested number.
-- Every question must directly test the topic.
-- Questions must be educationally meaningful.
-- Avoid trick questions.
-- Avoid ambiguous questions.
-- Avoid duplicate questions.
-- Every question must have exactly four different choices.
-- correct_answer must be exactly A, B, C, or D.
-- The correct answer must be objectively defensible.
-- Keep explanations concise.
-- Difficulty must exactly match the requested difficulty.
-- Points must always be 1.
+- Every question must directly test the specified topic.
+- Every question must be educationally meaningful.
+- Questions must be clear and unambiguous.
+- Do not create trick questions.
+- Do not depend on information outside the lesson/topic.
+- Avoid repetitive question patterns.
+- Every question must have exactly four choices.
+- All four choices must be different.
+- Only one choice may be correct.
+- The correct answer must be A, B, C, or D.
+- Include a concise explanation.
+- Every question must be {$difficulty}.
+- Every question must have exactly 1 point.
+- Do not generate another difficulty.
+- Do not duplicate questions.
+- Do not duplicate question wording.
 - Do not use markdown.
+- Do not add commentary.
+- Do not add text outside JSON.
 - Do not add extra JSON fields.
-- Do not include text outside JSON.
+
+IMPORTANT:
 
 Return ONLY valid JSON.
 
-Required structure:
+Return this exact structure:
 
 {
-  "questions": [
-    {
-      "question": "string",
-      "choice_a": "string",
-      "choice_b": "string",
-      "choice_c": "string",
-      "choice_d": "string",
-      "correct_answer": "A",
-      "explanation": "string",
-      "difficulty": "easy",
-      "points": 1
-    }
-  ]
+    "questions": [
+        {
+            "question": "string",
+            "choice_a": "string",
+            "choice_b": "string",
+            "choice_c": "string",
+            "choice_d": "string",
+            "correct_answer": "A",
+            "explanation": "string",
+            "difficulty": "{$difficulty}",
+            "points": 1
+        }
+    ]
 }
 
-The final response must contain:
-
-- {$remainingEasy} easy questions
-- {$remainingMedium} medium questions
-- {$remainingHard} hard questions
+Return exactly {$batchSize} questions whenever possible.
 PROMPT;
-
-            /*
-            |--------------------------------------------------------------------------
-            | 10. Token budget
-            |--------------------------------------------------------------------------
-            */
-
-            $maxTokens = max(
-                2000,
-                min(
-                    6500,
-                    $remainingTotal * 220
-                )
-            );
-
-            $generatedNow = [
-                'easy' => 0,
-                'medium' => 0,
-                'hard' => 0,
-            ];
-
-            /*
-            |--------------------------------------------------------------------------
-            | 11. Generate with retry
-            |--------------------------------------------------------------------------
-            */
-
-            $attempt = 0;
-
-            $validQuestions = [];
-
-            while (
-                $attempt
-                <
-                self::MAX_GENERATION_ATTEMPTS
-            ) {
-                $attempt++;
-
-                try {
-
-                    Log::info(
-                        'AI QUESTION GENERATION: SINGLE REQUEST START',
-                        [
-                            'topic_id' =>
-                                $topic->id,
-
-                            'easy' =>
-                                $remainingEasy,
-
-                            'medium' =>
-                                $remainingMedium,
-
-                            'hard' =>
-                                $remainingHard,
-
-                            'total' =>
-                                $remainingTotal,
-
-                            'attempt' =>
-                                $attempt,
-
-                            'max_tokens' =>
-                                $maxTokens,
-
-                            'model' =>
-                                $groq->getModel(),
-                        ]
-                    );
-
-                    $startTime =
-                        microtime(true);
-
-                    $result =
-                        $groq->generateJson(
-                            $prompt,
-                            $maxTokens
-                        );
-
-                    $durationMs =
-                        (int) round(
-                            (
-                                microtime(true)
-                                -
-                                $startTime
-                            ) * 1000
-                        );
-
-                    Log::info(
-                        'AI QUESTION GENERATION: SINGLE REQUEST SUCCESS',
-                        [
-                            'topic_id' =>
-                                $topic->id,
-
-                            'duration_ms' =>
-                                $durationMs,
-
-                            'model' =>
-                                $groq->getModel(),
-                        ]
-                    );
-
-                    $questions =
-                        $result['questions']
-                        ?? null;
-
-                    if (!is_array($questions)) {
-                        throw new RuntimeException(
-                            'Generated questions field is invalid.'
-                        );
-                    }
 
                     /*
                     |--------------------------------------------------------------------------
-                    | 12. Validate questions
+                    | 10. AI generation
                     |--------------------------------------------------------------------------
                     */
 
                     $validQuestions = [];
 
-                    $batchKeys = [];
-
-                    $difficultyCounters = [
-                        'easy' => 0,
-                        'medium' => 0,
-                        'hard' => 0,
-                    ];
-
-                    foreach (
-                        $questions
-                        as $question
+                    for (
+                        $attempt = 1;
+                        $attempt <= self::MAX_GENERATION_ATTEMPTS;
+                        $attempt++
                     ) {
-
-                        if (
-                            !is_array($question)
-                        ) {
-                            continue;
-                        }
-
-                        /*
-                        |--------------------------------------------------------------------------
-                        | Question text
-                        |--------------------------------------------------------------------------
-                        */
-
-                        $questionText =
-                            trim(
-                                (string) (
-                                    $question[
-                                        'question'
-                                    ] ?? ''
-                                )
-                            );
-
-                        if (
-                            $questionText === ''
-                        ) {
-                            continue;
-                        }
-
-                        $questionKey =
-                            $normalize(
-                                $questionText
-                            );
-
-                        if (
-                            $questionKey === ''
-                        ) {
-                            continue;
-                        }
-
-                        /*
-                        |--------------------------------------------------------------------------
-                        | Existing duplicate
-                        |--------------------------------------------------------------------------
-                        */
-
-                        if (
-                            isset(
-                                $existingQuestionKeys[
-                                    $questionKey
-                                ]
-                            )
-                        ) {
-                            Log::debug(
-                                'AI duplicate filtered.',
+                        try {
+                            Log::info(
+                                'AI QUESTION BATCH START',
                                 [
-                                    'topic_id' =>
-                                        $topic->id,
+                                    'topic_id' => $topicId,
+                                    'difficulty' => $difficulty,
+                                    'requested_batch_size' => $batchSize,
+                                    'remaining_before_batch' =>
+                                        $remainingForDifficulty,
+                                    'attempt' => $attempt,
+                                    'model' => $groq->getModel(),
+                                    'provider' => $groq->getProvider(),
                                 ]
                             );
 
-                            continue;
-                        }
+                            $startTime =
+                                microtime(true);
 
-                        /*
-                        |--------------------------------------------------------------------------
-                        | Duplicate inside current response
-                        |--------------------------------------------------------------------------
-                        */
+                            $result =
+                                $groq->generateJson(
+                                    $prompt
+                                );
 
-                        if (
-                            isset(
+                            $durationMs =
+                                (int) round(
+                                    (
+                                        microtime(true) -
+                                        $startTime
+                                    ) * 1000
+                                );
+
+                            Log::info(
+                                'AI QUESTION BATCH AI RESPONSE',
+                                [
+                                    'topic_id' => $topicId,
+                                    'difficulty' => $difficulty,
+                                    'requested_batch_size' => $batchSize,
+                                    'duration_ms' => $durationMs,
+                                    'model' => $groq->getModel(),
+                                    'provider' => $groq->getProvider(),
+                                ]
+                            );
+
+                            $questions =
+                                $result['questions']
+                                ?? null;
+
+                            if (!is_array($questions)) {
+                                throw new RuntimeException(
+                                    'Generated questions field is invalid.'
+                                );
+                            }
+
+                            $validQuestions = [];
+                            $batchKeys = [];
+
+                            foreach (
+                                $questions
+                                as $question
+                            ) {
+                                if (!is_array($question)) {
+                                    continue;
+                                }
+
+                                /*
+                                |--------------------------------------------------------------------------
+                                | Question text
+                                |--------------------------------------------------------------------------
+                                */
+
+                                $questionText =
+                                    trim(
+                                        (string) (
+                                            $question['question']
+                                            ?? ''
+                                        )
+                                    );
+
+                                if ($questionText === '') {
+                                    continue;
+                                }
+
+                                $questionKey =
+                                    $normalize(
+                                        $questionText
+                                    );
+
+                                if ($questionKey === '') {
+                                    continue;
+                                }
+
+                                /*
+                                |--------------------------------------------------------------------------
+                                | Existing DB duplicate
+                                |--------------------------------------------------------------------------
+                                */
+
+                                if (
+                                    isset(
+                                        $existingQuestionKeys[
+                                            $questionKey
+                                        ]
+                                    )
+                                ) {
+                                    continue;
+                                }
+
+                                /*
+                                |--------------------------------------------------------------------------
+                                | Current batch duplicate
+                                |--------------------------------------------------------------------------
+                                */
+
+                                if (
+                                    isset(
+                                        $batchKeys[
+                                            $questionKey
+                                        ]
+                                    )
+                                ) {
+                                    continue;
+                                }
+
+                                /*
+                                |--------------------------------------------------------------------------
+                                | Difficulty
+                                |--------------------------------------------------------------------------
+                                |
+                                | Since this entire AI request is for one difficulty,
+                                | the requested difficulty is authoritative.
+                                |
+                                | If AI omits the difficulty field, accept it as
+                                | the requested difficulty.
+                                |--------------------------------------------------------------------------
+                                */
+
+                                $questionDifficulty =
+                                    strtolower(
+                                        trim(
+                                            (string) (
+                                                $question['difficulty']
+                                                ?? ''
+                                            )
+                                        )
+                                    );
+
+                                if (
+                                    $questionDifficulty === ''
+                                ) {
+                                    $questionDifficulty =
+                                        $difficulty;
+                                }
+
+                                if (
+                                    $questionDifficulty !==
+                                    $difficulty
+                                ) {
+                                    continue;
+                                }
+
+                                /*
+                                |--------------------------------------------------------------------------
+                                | Choices
+                                |--------------------------------------------------------------------------
+                                */
+
+                                $choiceA =
+                                    trim(
+                                        (string) (
+                                            $question['choice_a']
+                                            ?? ''
+                                        )
+                                    );
+
+                                $choiceB =
+                                    trim(
+                                        (string) (
+                                            $question['choice_b']
+                                            ?? ''
+                                        )
+                                    );
+
+                                $choiceC =
+                                    trim(
+                                        (string) (
+                                            $question['choice_c']
+                                            ?? ''
+                                        )
+                                    );
+
+                                $choiceD =
+                                    trim(
+                                        (string) (
+                                            $question['choice_d']
+                                            ?? ''
+                                        )
+                                    );
+
+                                if (
+                                    $choiceA === '' ||
+                                    $choiceB === '' ||
+                                    $choiceC === '' ||
+                                    $choiceD === ''
+                                ) {
+                                    continue;
+                                }
+
+                                /*
+                                |--------------------------------------------------------------------------
+                                | Unique choices
+                                |--------------------------------------------------------------------------
+                                */
+
+                                $choiceKeys =
+                                    array_map(
+                                        $normalize,
+                                        [
+                                            $choiceA,
+                                            $choiceB,
+                                            $choiceC,
+                                            $choiceD,
+                                        ]
+                                    );
+
+                                if (
+                                    count(
+                                        array_unique(
+                                            $choiceKeys
+                                        )
+                                    ) !== 4
+                                ) {
+                                    continue;
+                                }
+
+                                /*
+                                |--------------------------------------------------------------------------
+                                | Correct answer
+                                |--------------------------------------------------------------------------
+                                */
+
+                                $correctAnswer =
+                                    strtoupper(
+                                        trim(
+                                            (string) (
+                                                $question[
+                                                    'correct_answer'
+                                                ]
+                                                ?? ''
+                                            )
+                                        )
+                                    );
+
+                                if (
+                                    !in_array(
+                                        $correctAnswer,
+                                        [
+                                            'A',
+                                            'B',
+                                            'C',
+                                            'D',
+                                        ],
+                                        true
+                                    )
+                                ) {
+                                    continue;
+                                }
+
+                                /*
+                                |--------------------------------------------------------------------------
+                                | Explanation
+                                |--------------------------------------------------------------------------
+                                */
+
+                                $explanation =
+                                    trim(
+                                        (string) (
+                                            $question[
+                                                'explanation'
+                                            ]
+                                            ?? ''
+                                        )
+                                    );
+
+                                /*
+                                |--------------------------------------------------------------------------
+                                | Valid question
+                                |--------------------------------------------------------------------------
+                                */
+
+                                $validQuestions[] = [
+                                    'question' =>
+                                        $questionText,
+
+                                    'choice_a' =>
+                                        $choiceA,
+
+                                    'choice_b' =>
+                                        $choiceB,
+
+                                    'choice_c' =>
+                                        $choiceC,
+
+                                    'choice_d' =>
+                                        $choiceD,
+
+                                    'correct_answer' =>
+                                        $correctAnswer,
+
+                                    'explanation' =>
+                                        $explanation !== ''
+                                            ? $explanation
+                                            : null,
+
+                                    'difficulty' =>
+                                        $difficulty,
+
+                                    'points' =>
+                                        1,
+                                ];
+
                                 $batchKeys[
                                     $questionKey
-                                ]
-                            )
-                        ) {
-                            continue;
-                        }
+                                ] = true;
 
-                        /*
-                        |--------------------------------------------------------------------------
-                        | Difficulty
-                        |--------------------------------------------------------------------------
-                        */
+                                if (
+                                    count(
+                                        $validQuestions
+                                    ) >=
+                                    $batchSize
+                                ) {
+                                    break;
+                                }
+                            }
 
-                        $difficulty =
-                            strtolower(
-                                trim(
-                                    (string) (
-                                        $question[
-                                            'difficulty'
-                                        ] ?? ''
-                                    )
-                                )
-                            );
+                            $validCount =
+                                count(
+                                    $validQuestions
+                                );
 
-                        if (
-                            !in_array(
-                                $difficulty,
+                            Log::info(
+                                'AI QUESTION BATCH VALIDATION RESULT',
                                 [
-                                    'easy',
-                                    'medium',
-                                    'hard',
-                                ],
-                                true
-                            )
-                        ) {
-                            continue;
-                        }
-
-                        /*
-                        |--------------------------------------------------------------------------
-                        | Do not exceed target
-                        |--------------------------------------------------------------------------
-                        */
-
-                        if (
-                            $difficultyCounters[
-                                $difficulty
-                            ]
-                            >=
-                            $remaining[
-                                $difficulty
-                            ]
-                        ) {
-                            continue;
-                        }
-
-                        /*
-                        |--------------------------------------------------------------------------
-                        | Choices
-                        |--------------------------------------------------------------------------
-                        */
-
-                        $choiceA =
-                            trim(
-                                (string) (
-                                    $question[
-                                        'choice_a'
-                                    ] ?? ''
-                                )
-                            );
-
-                        $choiceB =
-                            trim(
-                                (string) (
-                                    $question[
-                                        'choice_b'
-                                    ] ?? ''
-                                )
-                            );
-
-                        $choiceC =
-                            trim(
-                                (string) (
-                                    $question[
-                                        'choice_c'
-                                    ] ?? ''
-                                )
-                            );
-
-                        $choiceD =
-                            trim(
-                                (string) (
-                                    $question[
-                                        'choice_d'
-                                    ] ?? ''
-                                )
-                            );
-
-                        if (
-                            $choiceA === ''
-                            ||
-                            $choiceB === ''
-                            ||
-                            $choiceC === ''
-                            ||
-                            $choiceD === ''
-                        ) {
-                            continue;
-                        }
-
-                        /*
-                        |--------------------------------------------------------------------------
-                        | Choices must be unique
-                        |--------------------------------------------------------------------------
-                        */
-
-                        $choiceKeys =
-                            array_map(
-                                $normalize,
-                                [
-                                    $choiceA,
-                                    $choiceB,
-                                    $choiceC,
-                                    $choiceD,
+                                    'topic_id' => $topicId,
+                                    'difficulty' => $difficulty,
+                                    'requested' => $batchSize,
+                                    'valid_questions' => $validCount,
+                                    'attempt' => $attempt,
                                 ]
                             );
 
-                        if (
-                            count(
-                                array_unique(
-                                    $choiceKeys
-                                )
-                            ) !== 4
-                        ) {
-                            continue;
-                        }
+                            if ($validCount > 0) {
+                                break;
+                            }
 
-                        /*
-                        |--------------------------------------------------------------------------
-                        | Correct answer
-                        |--------------------------------------------------------------------------
-                        */
-
-                        $correctAnswer =
-                            strtoupper(
-                                trim(
-                                    (string) (
-                                        $question[
-                                            'correct_answer'
-                                        ] ?? ''
-                                    )
-                                )
+                            throw new RuntimeException(
+                                "AI returned 0 valid {$difficulty} questions."
                             );
+                        } catch (Throwable $e) {
+                            $errorMessage =
+                                strtolower(
+                                    $e->getMessage()
+                                );
 
-                        if (
-                            !in_array(
-                                $correctAnswer,
+                            $isRateLimited =
+                                str_contains(
+                                    $errorMessage,
+                                    'rate limit'
+                                ) ||
+                                str_contains(
+                                    $errorMessage,
+                                    '429'
+                                ) ||
+                                str_contains(
+                                    $errorMessage,
+                                    'too many requests'
+                                );
+
+                            Log::warning(
+                                'AI QUESTION BATCH FAILED',
                                 [
-                                    'A',
-                                    'B',
-                                    'C',
-                                    'D',
-                                ],
-                                true
-                            )
-                        ) {
-                            continue;
-                        }
-
-                        /*
-                        |--------------------------------------------------------------------------
-                        | Explanation
-                        |--------------------------------------------------------------------------
-                        */
-
-                        $explanation =
-                            trim(
-                                (string) (
-                                    $question[
-                                        'explanation'
-                                    ] ?? ''
-                                )
+                                    'topic_id' => $topicId,
+                                    'difficulty' => $difficulty,
+                                    'requested_batch_size' => $batchSize,
+                                    'attempt' => $attempt,
+                                    'rate_limited' => $isRateLimited,
+                                    'message' => $e->getMessage(),
+                                ]
                             );
 
-                        /*
-                        |--------------------------------------------------------------------------
-                        | Valid question
-                        |--------------------------------------------------------------------------
-                        */
+                            /*
+                            |--------------------------------------------------------------------------
+                            | NEVER retry rate limits here.
+                            |--------------------------------------------------------------------------
+                            */
 
-                        $validQuestions[] = [
-                            'question' =>
-                                $questionText,
+                            if ($isRateLimited) {
+                                throw $e;
+                            }
 
-                            'choice_a' =>
-                                $choiceA,
+                            /*
+                            |--------------------------------------------------------------------------
+                            | Retry malformed/invalid output once.
+                            |--------------------------------------------------------------------------
+                            */
 
-                            'choice_b' =>
-                                $choiceB,
+                            if (
+                                $attempt <
+                                self::MAX_GENERATION_ATTEMPTS
+                            ) {
+                                usleep(
+                                    self::GENERATION_RETRY_DELAY_MS *
+                                    1000
+                                );
 
-                            'choice_c' =>
-                                $choiceC,
+                                continue;
+                            }
 
-                            'choice_d' =>
-                                $choiceD,
-
-                            'correct_answer' =>
-                                $correctAnswer,
-
-                            'explanation' =>
-                                $explanation !== ''
-                                    ? $explanation
-                                    : null,
-
-                            'difficulty' =>
-                                $difficulty,
-
-                            'points' => 1,
-                        ];
-
-                        $batchKeys[
-                            $questionKey
-                        ] = true;
-
-                        $difficultyCounters[
-                            $difficulty
-                        ]++;
+                            throw $e;
+                        }
                     }
 
                     /*
                     |--------------------------------------------------------------------------
-                    | 13. At least one valid question
+                    | 11. Save valid questions
                     |--------------------------------------------------------------------------
                     */
 
-                    if (
-                        count($validQuestions) === 0
-                    ) {
+                    if (empty($validQuestions)) {
                         throw new RuntimeException(
-                            'AI returned no valid unique questions.'
+                            "No valid {$difficulty} questions were generated."
                         );
                     }
 
-                    break;
-
-                } catch (Throwable $e) {
-
-                    Log::warning(
-                        'AI QUESTION SINGLE REQUEST FAILED',
-                        [
-                            'topic_id' =>
-                                $topic->id,
-
-                            'attempt' =>
-                                $attempt,
-
-                            'message' =>
-                                $e->getMessage(),
-                        ]
-                    );
-
-                    if (
-                        $attempt
-                        >=
-                        self::MAX_GENERATION_ATTEMPTS
-                    ) {
-                        throw $e;
-                    }
-
-                    usleep(
-                        self::RETRY_DELAY_MS * 1000
-                    );
-                }
-            }
-
-            /*
-            |--------------------------------------------------------------------------
-            | 14. Save valid questions
-            |--------------------------------------------------------------------------
-            */
-
-            $savedCount =
-                DB::transaction(
-                    function () use (
-                        $topic,
-                        $validQuestions,
-                        &$existingQuestionKeys,
-                        $normalize
-                    ) {
-
-                        $savedCount = 0;
-
-                        foreach (
-                            $validQuestions
-                            as $question
-                        ) {
-
-                            $questionKey =
-                                $normalize(
-                                    $question[
-                                        'question'
-                                    ]
-                                );
-
-                            /*
-                            |--------------------------------------------------------------------------
-                            | Final duplicate protection
-                            |--------------------------------------------------------------------------
-                            */
-
-                            $alreadyExists =
-                                $topic
-                                    ->questions()
-                                    ->where(
-                                        'question',
-                                        $question[
-                                            'question'
-                                        ]
-                                    )
-                                    ->exists();
-
-                            if (
-                                $alreadyExists
+                    $savedCount =
+                        DB::transaction(
+                            function () use (
+                                $topic,
+                                $validQuestions,
+                                &$existingQuestionKeys,
+                                $normalize
                             ) {
-                                continue;
+                                $savedCount = 0;
+
+                                foreach (
+                                    $validQuestions
+                                    as $question
+                                ) {
+                                    $questionKey =
+                                        $normalize(
+                                            $question['question']
+                                        );
+
+                                    if (
+                                        isset(
+                                            $existingQuestionKeys[
+                                                $questionKey
+                                            ]
+                                        )
+                                    ) {
+                                        continue;
+                                    }
+
+                                    /*
+                                    |--------------------------------------------------------------------------
+                                    | Final duplicate protection
+                                    |--------------------------------------------------------------------------
+                                    */
+
+                                    $alreadyExists =
+                                        $topic
+                                            ->questions()
+                                            ->where(
+                                                'question',
+                                                $question['question']
+                                            )
+                                            ->exists();
+
+                                    if ($alreadyExists) {
+                                        $existingQuestionKeys[
+                                            $questionKey
+                                        ] = true;
+
+                                        continue;
+                                    }
+
+                                    $topic
+                                        ->questions()
+                                        ->create([
+                                            'question' =>
+                                                $question['question'],
+
+                                            'choice_a' =>
+                                                $question['choice_a'],
+
+                                            'choice_b' =>
+                                                $question['choice_b'],
+
+                                            'choice_c' =>
+                                                $question['choice_c'],
+
+                                            'choice_d' =>
+                                                $question['choice_d'],
+
+                                            'correct_answer' =>
+                                                $question['correct_answer'],
+
+                                            'explanation' =>
+                                                $question['explanation'],
+
+                                            'difficulty' =>
+                                                $question['difficulty'],
+
+                                            'points' =>
+                                                1,
+                                        ]);
+
+                                    $existingQuestionKeys[
+                                        $questionKey
+                                    ] = true;
+
+                                    $savedCount++;
+                                }
+
+                                return $savedCount;
                             }
+                        );
 
-                            $topic
-                                ->questions()
-                                ->create([
-                                    'question' =>
-                                        $question[
-                                            'question'
-                                        ],
+                    /*
+                    |--------------------------------------------------------------------------
+                    | 12. Prevent infinite loop
+                    |--------------------------------------------------------------------------
+                    */
 
-                                    'choice_a' =>
-                                        $question[
-                                            'choice_a'
-                                        ],
-
-                                    'choice_b' =>
-                                        $question[
-                                            'choice_b'
-                                        ],
-
-                                    'choice_c' =>
-                                        $question[
-                                            'choice_c'
-                                        ],
-
-                                    'choice_d' =>
-                                        $question[
-                                            'choice_d'
-                                        ],
-
-                                    'correct_answer' =>
-                                        $question[
-                                            'correct_answer'
-                                        ],
-
-                                    'explanation' =>
-                                        $question[
-                                            'explanation'
-                                        ],
-
-                                    'difficulty' =>
-                                        $question[
-                                            'difficulty'
-                                        ],
-
-                                    'points' =>
-                                        $question[
-                                            'points'
-                                        ],
-                                ]);
-
-                            $existingQuestionKeys[
-                                $questionKey
-                            ] = true;
-
-                            $savedCount++;
-                        }
-
-                        return $savedCount;
+                    if ($savedCount <= 0) {
+                        throw new RuntimeException(
+                            "The AI generated {$difficulty} questions, but none could be saved because they were duplicates."
+                        );
                     }
-                );
 
-            /*
-            |--------------------------------------------------------------------------
-            | 15. Track generated counts
-            |--------------------------------------------------------------------------
-            */
+                    $generatedNow[$difficulty] +=
+                        $savedCount;
 
-            foreach (
-                $validQuestions
-                as $question
-            ) {
+                    /*
+                    |--------------------------------------------------------------------------
+                    | 13. Recalculate DB progress
+                    |--------------------------------------------------------------------------
+                    */
 
-                $difficulty =
-                    $question['difficulty'];
+                    $currentCounts =
+                        $getCounts();
 
-                if (
-                    isset(
-                        $generatedNow[
-                            $difficulty
+                    $remaining =
+                        $calculateRemaining(
+                            $targets,
+                            $currentCounts
+                        );
+
+                    $remainingForDifficulty =
+                        $remaining[$difficulty];
+
+                    Log::info(
+                        'AI QUESTION BATCH SAVED',
+                        [
+                            'topic_id' => $topicId,
+                            'difficulty' => $difficulty,
+                            'requested_batch_size' => $batchSize,
+                            'saved_count' => $savedCount,
+                            'current_count' =>
+                                $currentCounts[$difficulty],
+                            'target' =>
+                                $targets[$difficulty],
+                            'remaining' =>
+                                $remainingForDifficulty,
+                            'generated_now' =>
+                                $generatedNow,
+                            'total_current' =>
+                                array_sum($currentCounts),
+                            'total_target' =>
+                                $totalRequested,
                         ]
-                    )
-                ) {
-                    $generatedNow[
-                        $difficulty
-                    ]++;
+                    );
                 }
             }
 
-            Log::info(
-                'AI QUESTION SINGLE REQUEST SAVED',
-                [
-                    'topic_id' =>
-                        $topic->id,
-
-                    'requested' => [
-                        'easy' =>
-                            $remainingEasy,
-
-                        'medium' =>
-                            $remainingMedium,
-
-                        'hard' =>
-                            $remainingHard,
-                    ],
-
-                    'valid_from_ai' =>
-                        count($validQuestions),
-
-                    'saved' =>
-                        $savedCount,
-
-                    'generated_now' =>
-                        $generatedNow,
-                ]
-            );
-
             /*
             |--------------------------------------------------------------------------
-            | 16. Final DB state
+            | 14. Final DB state
             |--------------------------------------------------------------------------
             */
 
@@ -1608,118 +1567,199 @@ PROMPT;
 
             /*
             |--------------------------------------------------------------------------
-            | 17. Incomplete
+            | 15. Incomplete
             |--------------------------------------------------------------------------
             */
 
             if (
-                array_sum(
-                    $finalRemaining
-                ) > 0
+                array_sum($finalRemaining) > 0
             ) {
-
                 Log::warning(
                     'AI QUESTION GENERATION INCOMPLETE',
                     [
-                        'topic_id' =>
-                            $topic->id,
-
-                        'targets' =>
-                            $targets,
-
-                        'final_counts' =>
-                            $finalCounts,
-
-                        'remaining' =>
-                            $finalRemaining,
+                        'topic_id' => $topicId,
+                        'targets' => $targets,
+                        'final_counts' => $finalCounts,
+                        'remaining' => $finalRemaining,
+                        'generated_now' => $generatedNow,
                     ]
                 );
 
                 return $this->topicGenerationResponse(
                     $topic,
                     $targets,
-                    $existingCounts,
+                    $initialCounts,
                     $finalCounts,
                     $generatedNow,
                     false,
-                    'Some questions were generated successfully, but the requested total was not reached. Retry this topic to generate the remaining questions.'
+                    'Some questions were generated successfully, but the requested total was not reached. Retry this topic to generate only the remaining questions.'
                 );
             }
 
             /*
             |--------------------------------------------------------------------------
-            | 18. Success
+            | 16. Complete
             |--------------------------------------------------------------------------
             */
 
             $wasResumed =
-                array_sum(
-                    $existingCounts
-                ) > 0;
+                array_sum($initialCounts) > 0;
 
             Log::info(
                 'AI LESSON STAGE 2 SUCCESS',
                 [
-                    'topic_id' =>
-                        $topic->id,
-
-                    'easy' =>
-                        $finalCounts['easy'],
-
-                    'medium' =>
-                        $finalCounts['medium'],
-
-                    'hard' =>
-                        $finalCounts['hard'],
-
-                    'generated_now' =>
-                        $generatedNow,
-
-                    'resumed' =>
-                        $wasResumed,
+                    'topic_id' => $topicId,
+                    'easy' => $finalCounts['easy'],
+                    'medium' => $finalCounts['medium'],
+                    'hard' => $finalCounts['hard'],
+                    'total' => array_sum($finalCounts),
+                    'target_total' => $totalRequested,
+                    'generated_now' => $generatedNow,
+                    'resumed' => $wasResumed,
                 ]
             );
 
             return $this->topicGenerationResponse(
                 $topic,
                 $targets,
-                $existingCounts,
+                $initialCounts,
                 $finalCounts,
                 $generatedNow,
                 true
             );
-
         } catch (Throwable $e) {
+            /*
+            |--------------------------------------------------------------------------
+            | 17. Error handling
+            |--------------------------------------------------------------------------
+            |
+            | IMPORTANT:
+            | Even when AI fails, query the database AGAIN.
+            |
+            | This guarantees that the frontend receives the actual
+            | persisted question count instead of 0/target.
+            |--------------------------------------------------------------------------
+            */
+
+            $errorCounts = [
+                'easy' => 0,
+                'medium' => 0,
+                'hard' => 0,
+            ];
+
+            try {
+                $errorTopic =
+                    Topic::query()
+                        ->find($topicId);
+
+                if ($errorTopic) {
+                    $rows =
+                        $errorTopic
+                            ->questions()
+                            ->selectRaw(
+                                'LOWER(TRIM(difficulty)) as difficulty, COUNT(*) as aggregate'
+                            )
+                            ->groupByRaw(
+                                'LOWER(TRIM(difficulty))'
+                            )
+                            ->get();
+
+                    foreach ($rows as $row) {
+                        $difficulty =
+                            strtolower(
+                                trim(
+                                    (string) $row->difficulty
+                                )
+                            );
+
+                        if (
+                            array_key_exists(
+                                $difficulty,
+                                $errorCounts
+                            )
+                        ) {
+                            $errorCounts[$difficulty] =
+                                (int) $row->aggregate;
+                        }
+                    }
+                }
+            } catch (Throwable $countException) {
+                Log::warning(
+                    'Could not read DB question progress after failure',
+                    [
+                        'topic_id' => $topicId,
+                        'error' =>
+                            $countException->getMessage(),
+                    ]
+                );
+            }
+
+            $errorRemaining = [
+                'easy' => max(
+                    0,
+                    $targets['easy'] -
+                    $errorCounts['easy']
+                ),
+
+                'medium' => max(
+                    0,
+                    $targets['medium'] -
+                    $errorCounts['medium']
+                ),
+
+                'hard' => max(
+                    0,
+                    $targets['hard'] -
+                    $errorCounts['hard']
+                ),
+            ];
+
+            $errorTotalCurrent =
+                array_sum(
+                    $errorCounts
+                );
+
+            $errorTotalRemaining =
+                array_sum(
+                    $errorRemaining
+                );
+
+            $message =
+                strtolower(
+                    $e->getMessage()
+                );
+
+            $isRateLimited =
+                str_contains(
+                    $message,
+                    'rate limit'
+                ) ||
+                str_contains(
+                    $message,
+                    '429'
+                ) ||
+                str_contains(
+                    $message,
+                    'too many requests'
+                );
 
             Log::error(
                 'AI LESSON STAGE 2 FAILED',
                 [
-                    'topic_id' =>
-                        $validated['topic_id']
-                        ?? null,
-
-                    'message' =>
-                        $e->getMessage(),
-
-                    'exception' =>
-                        get_class($e),
+                    'topic_id' => $topicId,
+                    'message' => $e->getMessage(),
+                    'exception' => get_class($e),
+                    'model' => $groq->getModel(),
+                    'provider' => $groq->getProvider(),
+                    'database_counts' => $errorCounts,
+                    'targets' => $targets,
+                    'remaining' => $errorRemaining,
+                    'total_current' =>
+                        $errorTotalCurrent,
+                    'total_remaining' =>
+                        $errorTotalRemaining,
                 ]
             );
-
-            $isRateLimited =
-                str_contains(
-                    strtolower(
-                        $e->getMessage()
-                    ),
-                    'rate limit'
-                )
-                ||
-                str_contains(
-                    strtolower(
-                        $e->getMessage()
-                    ),
-                    '429'
-                );
 
             return response()->json([
                 'success' => false,
@@ -1742,9 +1782,118 @@ PROMPT;
                     true,
 
                 'topic_id' =>
-                    $validated['topic_id']
-                    ?? null,
+                    $topicId,
 
+                'topic_name' =>
+                    isset($topic)
+                        ? $topic->name
+                        : null,
+
+                /*
+                |--------------------------------------------------------------------------
+                | REAL DATABASE PROGRESS
+                |--------------------------------------------------------------------------
+                */
+
+                'progress' => [
+                    'easy' => [
+                        'current' =>
+                            $errorCounts['easy'],
+
+                        'target' =>
+                            $targets['easy'],
+
+                        'remaining' =>
+                            $errorRemaining['easy'],
+                    ],
+
+                    'medium' => [
+                        'current' =>
+                            $errorCounts['medium'],
+
+                        'target' =>
+                            $targets['medium'],
+
+                        'remaining' =>
+                            $errorRemaining['medium'],
+                    ],
+
+                    'hard' => [
+                        'current' =>
+                            $errorCounts['hard'],
+
+                        'target' =>
+                            $targets['hard'],
+
+                        'remaining' =>
+                            $errorRemaining['hard'],
+                    ],
+
+                    'total_current' =>
+                        $errorTotalCurrent,
+
+                    'total_target' =>
+                        $totalRequested,
+
+                    'total_remaining' =>
+                        $errorTotalRemaining,
+
+                    'percentage' =>
+                        $totalRequested > 0
+                            ? round(
+                                (
+                                    $errorTotalCurrent /
+                                    $totalRequested
+                                ) * 100,
+                                2
+                            )
+                            : 100,
+                ],
+
+                /*
+                |--------------------------------------------------------------------------
+                | Easy frontend fallback
+                |--------------------------------------------------------------------------
+                */
+
+                'current_counts' =>
+                    $errorCounts,
+
+                'remaining' =>
+                    $errorRemaining,
+
+                'configuration' => [
+                    'easy_questions' =>
+                        $targets['easy'],
+
+                    'medium_questions' =>
+                        $targets['medium'],
+
+                    'hard_questions' =>
+                        $targets['hard'],
+
+                    'total_questions' =>
+                        $totalRequested,
+
+                    'batch_size' =>
+                        self::MAX_BATCH_SIZE,
+
+                    'final_easy' =>
+                        $errorCounts['easy'],
+
+                    'final_medium' =>
+                        $errorCounts['medium'],
+
+                    'final_hard' =>
+                        $errorCounts['hard'],
+                ],
+
+                'generated_now' =>
+                    $generatedNow ?? [
+                        'easy' => 0,
+                        'medium' => 0,
+                        'hard' => 0,
+                    ],
             ], $isRateLimited ? 429 : 500);
         }
     }
@@ -1764,41 +1913,44 @@ PROMPT;
         bool $success,
         ?string $error = null
     ) {
-
         $totalRequested =
             array_sum($targets);
 
         $totalCurrent =
             array_sum($finalCounts);
 
-        $complete =
-            (
+        $remaining = [
+            'easy' => max(
+                0,
+                $targets['easy'] -
                 $finalCounts['easy']
-                >=
-                $targets['easy']
-            )
-            &&
-            (
+            ),
+
+            'medium' => max(
+                0,
+                $targets['medium'] -
                 $finalCounts['medium']
-                >=
-                $targets['medium']
-            )
-            &&
-            (
+            ),
+
+            'hard' => max(
+                0,
+                $targets['hard'] -
                 $finalCounts['hard']
-                >=
-                $targets['hard']
-            );
+            ),
+        ];
+
+        $complete =
+            array_sum($remaining) === 0;
 
         /*
         |--------------------------------------------------------------------------
-        | Only load questions on completion
+        | Only return questions when complete.
         |--------------------------------------------------------------------------
         */
 
         $questions = [];
 
-        if ($success || $complete) {
+        if ($success && $complete) {
             $questions =
                 $topic
                     ->questions()
@@ -1808,26 +1960,26 @@ PROMPT;
 
         $response = [
             'success' =>
-                $success && $complete,
+                $success &&
+                $complete,
 
             'stage' =>
                 'topic_questions',
 
             'message' =>
-                ($success && $complete)
+                (
+                    $success &&
+                    $complete
+                )
                     ? (
-                        array_sum(
-                            $existingCounts
-                        ) > 0
+                        array_sum($existingCounts) > 0
                             ? 'Topic questions successfully resumed and completed.'
                             : 'Topic questions generated successfully.'
                     )
                     : 'Question generation was paused. Successfully generated questions were preserved. Retry this topic to continue automatically from the remaining questions.',
 
             'resumed' =>
-                array_sum(
-                    $existingCounts
-                ) > 0,
+                array_sum($existingCounts) > 0,
 
             'resumable' =>
                 !$complete,
@@ -1838,8 +1990,13 @@ PROMPT;
             'topic_name' =>
                 $topic->name,
 
-            'progress' => [
+            /*
+            |--------------------------------------------------------------------------
+            | Progress
+            |--------------------------------------------------------------------------
+            */
 
+            'progress' => [
                 'easy' => [
                     'current' =>
                         $finalCounts['easy'],
@@ -1848,12 +2005,7 @@ PROMPT;
                         $targets['easy'],
 
                     'remaining' =>
-                        max(
-                            0,
-                            $targets['easy']
-                            -
-                            $finalCounts['easy']
-                        ),
+                        $remaining['easy'],
                 ],
 
                 'medium' => [
@@ -1864,12 +2016,7 @@ PROMPT;
                         $targets['medium'],
 
                     'remaining' =>
-                        max(
-                            0,
-                            $targets['medium']
-                            -
-                            $finalCounts['medium']
-                        ),
+                        $remaining['medium'],
                 ],
 
                 'hard' => [
@@ -1880,12 +2027,7 @@ PROMPT;
                         $targets['hard'],
 
                     'remaining' =>
-                        max(
-                            0,
-                            $targets['hard']
-                            -
-                            $finalCounts['hard']
-                        ),
+                        $remaining['hard'],
                 ],
 
                 'total_current' =>
@@ -1894,12 +2036,14 @@ PROMPT;
                 'total_target' =>
                     $totalRequested,
 
+                'total_remaining' =>
+                    array_sum($remaining),
+
                 'percentage' =>
                     $totalRequested > 0
                         ? round(
                             (
-                                $totalCurrent
-                                /
+                                $totalCurrent /
                                 $totalRequested
                             ) * 100,
                             2
@@ -1907,8 +2051,25 @@ PROMPT;
                         : 100,
             ],
 
-            'configuration' => [
+            /*
+            |--------------------------------------------------------------------------
+            | Direct count fields
+            |--------------------------------------------------------------------------
+            */
 
+            'current_counts' =>
+                $finalCounts,
+
+            'remaining' =>
+                $remaining,
+
+            /*
+            |--------------------------------------------------------------------------
+            | Configuration
+            |--------------------------------------------------------------------------
+            */
+
+            'configuration' => [
                 'easy_questions' =>
                     $targets['easy'],
 
@@ -1920,6 +2081,9 @@ PROMPT;
 
                 'total_questions' =>
                     $totalRequested,
+
+                'batch_size' =>
+                    self::MAX_BATCH_SIZE,
 
                 'existing_easy' =>
                     $existingCounts['easy'],
@@ -1951,15 +2115,8 @@ PROMPT;
 
             'generated_now' =>
                 $generatedNow,
-        ];
 
-        if ($error !== null) {
-            $response['error'] = $error;
-        }
-
-        if (count($questions) > 0) {
-
-            $response['data'] = [
+            'data' => [
                 'topic_id' =>
                     $topic->id,
 
@@ -1968,24 +2125,18 @@ PROMPT;
 
                 'questions' =>
                     $questions,
-            ];
+            ],
+        ];
 
-        } else {
-
-            $response['data'] = [
-                'topic_id' =>
-                    $topic->id,
-
-                'topic_name' =>
-                    $topic->name,
-
-                'questions' => [],
-            ];
+        if ($error !== null) {
+            $response['error'] = $error;
         }
 
         return response()->json(
             $response,
-            $success ? 200 : 500
+            $success && $complete
+                ? 200
+                : 500
         );
     }
 }

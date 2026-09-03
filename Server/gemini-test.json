@@ -1,0 +1,10 @@
+﻿{
+  "model": "gemini-3.6-flash",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Return ONLY valid JSON. No markdown. No explanation. Return exactly: {\"lesson_title\":\"Introduction to Probability\",\"lesson_description\":\"Basic probability concepts\",\"topics\":[{\"name\":\"Basic Probability\",\"description\":\"Fundamental probability concepts\",\"topic_order\":1}]}"
+    }
+  ],
+  "temperature": 0
+}

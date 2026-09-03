@@ -344,120 +344,238 @@ const GenerateLesson = ({
     // ============================================================
 
     const getTopicProgress = (
-        data,
-        expectedEasy,
-        expectedMedium,
-        expectedHard
+    data,
+    expectedEasy,
+    expectedMedium,
+    expectedHard
+) => {
+    /*
+     * Backend progress priority:
+     *
+     * 1. progress
+     * 2. current_counts
+     * 3. generated_now
+     *
+     * IMPORTANT:
+     * generated_now means questions generated during the
+     * current request, NOT necessarily the total already
+     * stored in the database.
+     */
+
+    const progress = data?.progress || {};
+
+    const currentCounts =
+        data?.current_counts || {};
+
+    const generatedNow =
+        data?.generated_now || {};
+
+    const readDifficultyProgress = (
+        difficulty
     ) => {
-        const progress =
-            data?.progress || {};
+        // --------------------------------------------------------
+        // 1. progress[difficulty]
+        // --------------------------------------------------------
 
-        const generatedNow =
-            data?.generated_now || {};
+        const progressValue =
+            progress?.[difficulty];
 
-        const readDifficultyProgress = (
-            difficulty,
-            fallback
-        ) => {
-            const value =
-                progress?.[difficulty];
-
+        if (
+            progressValue !== undefined &&
+            progressValue !== null
+        ) {
             if (
-                value &&
-                typeof value === "object"
+                typeof progressValue === "object"
             ) {
-                return Number(
-                    value.current ??
-                        value.generated ??
-                        value.count ??
-                        fallback
-                );
+                const current =
+                    progressValue.current ??
+                    progressValue.generated ??
+                    progressValue.count;
+
+                if (
+                    current !== undefined &&
+                    current !== null
+                ) {
+                    return Number(current);
+                }
             }
 
             if (
-                typeof value === "number"
+                typeof progressValue === "number" ||
+                typeof progressValue === "string"
             ) {
-                return value;
+                return Number(progressValue);
+            }
+        }
+
+        // --------------------------------------------------------
+        // 2. current_counts
+        //
+        // This represents the actual DB count returned
+        // by the backend.
+        // --------------------------------------------------------
+
+        const currentValue =
+            currentCounts?.[difficulty];
+
+        if (
+            currentValue !== undefined &&
+            currentValue !== null
+        ) {
+            if (
+                typeof currentValue === "object"
+            ) {
+                const current =
+                    currentValue.current ??
+                    currentValue.count ??
+                    currentValue.generated;
+
+                if (
+                    current !== undefined &&
+                    current !== null
+                ) {
+                    return Number(current);
+                }
             }
 
-            return Number(
-                generatedNow?.[difficulty] ??
-                    fallback
-            );
-        };
+            if (
+                typeof currentValue === "number" ||
+                typeof currentValue === "string"
+            ) {
+                return Number(currentValue);
+            }
+        }
 
-        const easy = Math.min(
-            expectedEasy,
-            Math.max(
-                0,
-                readDifficultyProgress(
-                    "easy",
-                    0
-                )
-            )
-        );
+        // --------------------------------------------------------
+        // 3. generated_now
+        //
+        // Last fallback only.
+        // --------------------------------------------------------
 
-        const medium = Math.min(
-            expectedMedium,
-            Math.max(
-                0,
-                readDifficultyProgress(
-                    "medium",
-                    0
-                )
-            )
-        );
+        const generatedValue =
+            generatedNow?.[difficulty];
 
-        const hard = Math.min(
-            expectedHard,
-            Math.max(
-                0,
-                readDifficultyProgress(
-                    "hard",
-                    0
-                )
-            )
-        );
+        if (
+            generatedValue !== undefined &&
+            generatedValue !== null
+        ) {
+            if (
+                typeof generatedValue === "object"
+            ) {
+                const generated =
+                    generatedValue.generated ??
+                    generatedValue.current ??
+                    generatedValue.count;
 
-        const calculatedTotal =
-            easy +
-            medium +
-            hard;
+                if (
+                    generated !== undefined &&
+                    generated !== null
+                ) {
+                    return Number(generated);
+                }
+            }
 
-        const backendTotal =
-            Number(
-                progress?.total_current ??
-                    calculatedTotal
-            );
+            if (
+                typeof generatedValue === "number" ||
+                typeof generatedValue === "string"
+            ) {
+                return Number(generatedValue);
+            }
+        }
 
-        const totalCurrent =
-            Math.min(
-                expectedEasy +
-                    expectedMedium +
-                    expectedHard,
-                Math.max(
-                    calculatedTotal,
-                    backendTotal
-                )
-            );
-
-        const totalTarget =
-            Number(
-                progress?.total_target ??
-                    expectedEasy +
-                        expectedMedium +
-                        expectedHard
-            );
-
-        return {
-            easy,
-            medium,
-            hard,
-            totalCurrent,
-            totalTarget,
-        };
+        return 0;
     };
 
+    const easy = Math.min(
+        expectedEasy,
+        Math.max(
+            0,
+            readDifficultyProgress("easy")
+        )
+    );
+
+    const medium = Math.min(
+        expectedMedium,
+        Math.max(
+            0,
+            readDifficultyProgress("medium")
+        )
+    );
+
+    const hard = Math.min(
+        expectedHard,
+        Math.max(
+            0,
+            readDifficultyProgress("hard")
+        )
+    );
+
+    const calculatedTotal =
+        easy +
+        medium +
+        hard;
+
+    // ------------------------------------------------------------
+    // Backend may explicitly provide total_current
+    // ------------------------------------------------------------
+
+    const backendTotalCandidates = [
+        progress?.total_current,
+        currentCounts?.total,
+        currentCounts?.total_current,
+    ];
+
+    let backendTotal = null;
+
+    for (
+        const candidate of backendTotalCandidates
+    ) {
+        if (
+            candidate !== undefined &&
+            candidate !== null &&
+            Number.isFinite(
+                Number(candidate)
+            )
+        ) {
+            backendTotal =
+                Number(candidate);
+
+            break;
+        }
+    }
+
+    const totalCurrent = Math.min(
+        expectedEasy +
+            expectedMedium +
+            expectedHard,
+
+        Math.max(
+            calculatedTotal,
+            backendTotal ?? 0
+        )
+    );
+
+    const totalTarget = Math.max(
+        expectedEasy +
+            expectedMedium +
+            expectedHard,
+
+        Number(
+            progress?.total_target ??
+                expectedEasy +
+                    expectedMedium +
+                    expectedHard
+        )
+    );
+
+    return {
+        easy,
+        medium,
+        hard,
+        totalCurrent,
+        totalTarget,
+    };
+};
     // ============================================================
     // STAGE 2
     //
