@@ -29,7 +29,7 @@ WORKDIR /var/www
 COPY . .
 
 # Copy TiDB Cloud SSL certificate
-COPY docker/ca.pem /etc/ssl/certs/tidb-ca.pem
+COPY tidb_cacert/tidb.pem /etc/ssl/certs/tidb.pem
 
 # Install PHP dependencies
 RUN composer install \
