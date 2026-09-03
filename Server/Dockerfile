@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y \
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
+# Set working directory
 WORKDIR /var/www
 
 # Copy Laravel application
@@ -38,6 +39,9 @@ RUN composer install \
     --optimize-autoloader \
     --no-dev
 
+# Verify Composer dependencies and PDFParser
+RUN php -r "require 'vendor/autoload.php'; var_dump(class_exists('Smalot\\PdfParser\\Parser'));"
+
 # Laravel permissions
 RUN mkdir -p \
     storage/framework/cache \
@@ -47,11 +51,13 @@ RUN mkdir -p \
     && chown -R www-data:www-data storage bootstrap/cache \
     && chmod -R 775 storage bootstrap/cache
 
-# Laravel production caches
+# Clear Laravel caches
 RUN php artisan config:clear \
     && php artisan route:clear \
     && php artisan view:clear
 
+# Render uses the PORT environment variable
 EXPOSE 10000
 
-CMD php artisan serve --host=0.0.0.0 --port=${PORT:-10000}
+# Start Laravel
+CMD ["sh", "-c", "php artisan serve --host=0.0.0.0 --port=${PORT:-10000}"]
