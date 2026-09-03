@@ -14,4 +14,4 @@ jobs:
         run: |
           curl --max-time 60 \
             -w "\nHTTP STATUS: %{http_code}\n" \
-            "https://problearn.onrender.com/api/topics"
+            "https://problearn-ai/api/topics"
