@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Models\Lesson;
 use App\Models\LessonAssignment;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -57,9 +58,15 @@ class AuthController extends Controller
         // STEP 2: ASSIGN ALL LESSONS TO THE NEW USER
         // --------------------------------------------------------
 
-        LessonAssignment::assignAllLessonsToUser(
-            $user->id
-        );
+        $lessons = Lesson::select('id')->get();
+
+        foreach ($lessons as $lesson) {
+            LessonAssignment::create([
+                'user_id' => $user->id,
+                'lesson_id' => $lesson->id,
+                'assigned_at' => now(),
+            ]);
+        }
 
         // --------------------------------------------------------
         // STEP 3: CREATE LOGIN TOKEN
@@ -270,7 +277,7 @@ class AuthController extends Controller
                 'questions_correct' =>
                     $user->questions_correct ?? 0,
 
-                'success_rate' =>   
+                'success_rate' =>
                     $user->success_rate ?? 0,
             ],
         ]);
