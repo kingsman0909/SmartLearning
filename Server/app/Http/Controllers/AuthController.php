@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Models\LessonAssignment;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 
@@ -14,7 +15,7 @@ class AuthController extends Controller
 
     public function register(Request $request)
     {
-                $request->validate([
+        $request->validate([
             'alias' => [
                 'required',
                 'string',
@@ -39,8 +40,9 @@ class AuthController extends Controller
                 'same:password',
             ],
         ]);
+
         // --------------------------------------------------------
-        // CREATE USER
+        // STEP 1: CREATE USER
         // --------------------------------------------------------
 
         $user = User::create([
@@ -52,7 +54,15 @@ class AuthController extends Controller
         ]);
 
         // --------------------------------------------------------
-        // CREATE LOGIN TOKEN
+        // STEP 2: ASSIGN ALL LESSONS TO THE NEW USER
+        // --------------------------------------------------------
+
+        LessonAssignment::assignAllLessonsToUser(
+            $user->id
+        );
+
+        // --------------------------------------------------------
+        // STEP 3: CREATE LOGIN TOKEN
         // --------------------------------------------------------
 
         $token = $user->createToken(
@@ -60,7 +70,7 @@ class AuthController extends Controller
         )->plainTextToken;
 
         // --------------------------------------------------------
-        // RESPONSE
+        // STEP 4: RESPONSE
         // --------------------------------------------------------
 
         return response()->json([
@@ -89,16 +99,16 @@ class AuthController extends Controller
                     $user->level,
 
                 'total_score' =>
-                    $user->total_score,
+                    $user->total_score ?? 0,
 
                 'questions_answered' =>
-                    $user->questions_answered,
+                    $user->questions_answered ?? 0,
 
                 'questions_correct' =>
-                    $user->questions_correct,
+                    $user->questions_correct ?? 0,
 
                 'success_rate' =>
-                    $user->success_rate,
+                    $user->success_rate ?? 0,
             ],
         ], 201);
     }
@@ -260,7 +270,7 @@ class AuthController extends Controller
                 'questions_correct' =>
                     $user->questions_correct ?? 0,
 
-                'success_rate' =>
+                'success_rate' =>   
                     $user->success_rate ?? 0,
             ],
         ]);

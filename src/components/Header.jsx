@@ -56,8 +56,12 @@ const Header = ({
       {/* NAVIGATION */}
 
       <nav className="nav-buttons">
-        {navigation.map(
-          ([section, label]) => (
+        {navigation.map(([section, label]) => {
+          if (section === "generate-lesson") {
+            return null;
+          }
+
+          return (
             <button
               key={section}
               className={`nav-btn ${
@@ -65,14 +69,12 @@ const Header = ({
                   ? "active"
                   : ""
               }`}
-              onClick={() =>
-                navigateTo(section)
-              }
+              onClick={() => navigateTo(section)}
             >
               {label}
             </button>
-          )
-        )}
+          );
+        })}
       </nav>
 
       {/* USER MENU */}

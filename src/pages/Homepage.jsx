@@ -3166,10 +3166,11 @@ const Homepage = () => {
         )}
 
         {/* ==================================================
-            GENERATE LESSON
+            GENERATE LESSON - For now this features is not used
         ================================================== */}
 
-        {activeSection ===
+
+        {/*activeSection ===
           "generate-lesson" && (
           <GenerateLesson
             showToast={
@@ -3184,7 +3185,7 @@ const Homepage = () => {
               )
             }
           />
-        )}
+        ) */}
 
         {/* ==================================================
             LEARN
