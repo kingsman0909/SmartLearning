@@ -47,6 +47,7 @@
             border: none;
             padding-inline: 5px;
             outline: none;
+            font-size: clamp(16px, 1vw, 18px);
         }
 
         input:focus{
