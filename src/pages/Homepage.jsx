@@ -17,7 +17,6 @@ import AssessmentsSection from "../components/AssessmentsSection";
 import ProfileModal from "../components/ProfileModal";
 import ResultModal from "../components/ResultModal";
 import Toast from "../components/Toast";
-import GenerateLesson from "../components/GenerateLesson";
 
 // ============================================================
 // CONSTANTS
@@ -33,18 +32,8 @@ const LETTERS = ["A", "B", "C", "D"];
 const FLASHCARD_STORAGE_KEY =
   "problearn_flashcards_progress";
 
-const CACHE_PREFIX =
+const OLD_CACHE_PREFIX =
   "problearn_homepage_cache";
-
-const CACHE_VERSION = 1;
-
-// Content can stay cached longer.
-const CONTENT_CACHE_TTL =
-  15 * 60 * 1000;
-
-// Progress changes more frequently.
-const PROGRESS_CACHE_TTL =
-  30 * 1000;
 
 const PASSING_SCORE = 60;
 
@@ -52,13 +41,16 @@ const PASSING_SCORE = 60;
 // AUTH
 // ============================================================
 
-const getAuthToken = () =>
-  localStorage.getItem("token") ||
-  localStorage.getItem("auth_token") ||
-  localStorage.getItem("access_token");
+const getAuthToken = () => {
+  return (
+    localStorage.getItem("token") ||
+    localStorage.getItem("auth_token") ||
+    localStorage.getItem("access_token")
+  );
+};
 
 // ============================================================
-// API
+// API FETCH
 // ============================================================
 
 const apiFetch = async (
@@ -67,21 +59,26 @@ const apiFetch = async (
 ) => {
   const token = getAuthToken();
 
+  console.log(
+    `[ProbLearn API] REQUEST → ${endpoint}`,
+    {
+      method: options.method || "GET",
+      hasToken: Boolean(token),
+    }
+  );
+
   const response = await fetch(
     `${API_URL}${endpoint}`,
     {
       ...options,
-
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
-
         ...(token
           ? {
               Authorization: `Bearer ${token}`,
             }
           : {}),
-
         ...(options.headers || {}),
       },
     }
@@ -94,6 +91,15 @@ const apiFetch = async (
   } catch {
     data = null;
   }
+
+  console.log(
+    `[ProbLearn API] RESPONSE ← ${endpoint}`,
+    {
+      status: response.status,
+      ok: response.ok,
+      data,
+    }
+  );
 
   if (!response.ok) {
     throw new Error(
@@ -110,126 +116,175 @@ const apiFetch = async (
 // RESPONSE HELPERS
 // ============================================================
 
-const getArrayData = (
-  response
-) => {
-  const data =
-    response?.data ??
-    response;
+const getArrayData = (response) => {
+  if (Array.isArray(response)) {
+    return response;
+  }
 
-  return Array.isArray(data)
-    ? data
+  if (Array.isArray(response?.data)) {
+    return response.data;
+  }
+
+  if (Array.isArray(response?.data?.data)) {
+    return response.data.data;
+  }
+
+  if (Array.isArray(response?.questions)) {
+    return response.questions;
+  }
+
+  if (Array.isArray(response?.data?.questions)) {
+    return response.data.questions;
+  }
+
+  if (Array.isArray(response?.assessments)) {
+    return response.assessments;
+  }
+
+  if (Array.isArray(response?.data?.assessments)) {
+    return response.data.assessments;
+  }
+
+  if (Array.isArray(response?.topics)) {
+    return response.topics;
+  }
+
+  if (Array.isArray(response?.data?.topics)) {
+    return response.data.topics;
+  }
+
+  if (Array.isArray(response?.lessons)) {
+    return response.lessons;
+  }
+
+  if (Array.isArray(response?.data?.lessons)) {
+    return response.data.lessons;
+  }
+
+  return [];
+};
+
+const getObjectData = (response) => {
+  if (
+    response?.data &&
+    typeof response.data === "object" &&
+    !Array.isArray(response.data)
+  ) {
+    return response.data;
+  }
+
+  if (
+    response &&
+    typeof response === "object" &&
+    !Array.isArray(response)
+  ) {
+    return response;
+  }
+
+  return {};
+};
+
+// ============================================================
+// LESSON DATA EXTRACTOR
+// ============================================================
+
+const extractLessons = (response) => {
+  let lessons = [];
+
+  if (Array.isArray(response)) {
+    lessons = response;
+  } else if (Array.isArray(response?.lessons)) {
+    lessons = response.lessons;
+  } else if (Array.isArray(response?.data?.lessons)) {
+    lessons = response.data.lessons;
+  } else if (Array.isArray(response?.data)) {
+    lessons = response.data;
+  }
+
+  return Array.isArray(lessons)
+    ? lessons
     : [];
 };
 
-const getObjectData = (
-  response
-) =>
-  response?.data ??
-  response ??
-  {};
-
 // ============================================================
-// CACHE HELPERS
+// TOPIC DATA EXTRACTOR
 // ============================================================
 
-const getCacheKey = (
-  userId
-) =>
-  `${CACHE_PREFIX}:v${CACHE_VERSION}:${userId}`;
-
-const readCache = (
-  userId
+const extractTopicsFromLessons = (
+  lessons
 ) => {
-  if (!userId) {
-    return null;
+  if (!Array.isArray(lessons)) {
+    return [];
   }
 
-  try {
-    const key =
-      getCacheKey(userId);
+  const result = [];
 
-    const raw =
-      localStorage.getItem(key);
-
-    if (!raw) {
-      return null;
+  lessons.forEach((lesson) => {
+    if (!Array.isArray(lesson?.topics)) {
+      return;
     }
 
-    const parsed =
-      JSON.parse(raw);
+    lesson.topics.forEach((topic) => {
+      result.push({
+        ...topic,
+        lesson_id:
+          topic.lesson_id ??
+          lesson.id,
+      });
+    });
+  });
 
-    if (
-      !parsed ||
-      typeof parsed !== "object"
-    ) {
-      return null;
+  return result;
+};
+
+// ============================================================
+// ASSESSMENT DATA EXTRACTOR
+// ============================================================
+
+const extractAssessmentsFromLessons = (
+  lessons
+) => {
+  if (!Array.isArray(lessons)) {
+    return [];
+  }
+
+  const assessments = [];
+
+  lessons.forEach((lesson) => {
+    if (!Array.isArray(lesson?.topics)) {
+      return;
     }
 
-    return parsed;
-  } catch (error) {
-    console.warn(
-      "Unable to read homepage cache:",
-      error
-    );
+    lesson.topics.forEach((topic) => {
+      if (
+        !Array.isArray(
+          topic?.assessments
+        )
+      ) {
+        return;
+      }
 
-    return null;
-  }
-};
+      topic.assessments.forEach(
+        (assessment) => {
+          assessments.push({
+            ...assessment,
+            topic_id:
+              assessment.topic_id ??
+              topic.id,
+          });
+        }
+      );
+    });
+  });
 
-const writeCache = (
-  userId,
-  data
-) => {
-  if (!userId) {
-    return;
-  }
-
-  try {
-    const key =
-      getCacheKey(userId);
-
-    localStorage.setItem(
-      key,
-      JSON.stringify({
-        version: CACHE_VERSION,
-        timestamp: Date.now(),
-        data,
-      })
-    );
-  } catch (error) {
-    // localStorage can fail if the cache
-    // becomes too large.
-    console.warn(
-      "Unable to save homepage cache:",
-      error
-    );
-  }
-};
-
-const clearUserCache = (
-  userId
-) => {
-  if (!userId) {
-    return;
-  }
-
-  try {
-    localStorage.removeItem(
-      getCacheKey(userId)
-    );
-  } catch {
-    // Ignore cache cleanup errors.
-  }
+  return assessments;
 };
 
 // ============================================================
 // USER NORMALIZER
 // ============================================================
 
-const normalizeUser = (
-  response
-) => {
+const normalizeUser = (response) => {
   if (!response) {
     return null;
   }
@@ -247,12 +302,9 @@ const normalizeUser = (
       typeof item === "object" &&
       !Array.isArray(item) &&
       (
-        item.username !==
-          undefined ||
-        item.alias !==
-          undefined ||
-        item.id !==
-          undefined
+        item.username !== undefined ||
+        item.alias !== undefined ||
+        item.id !== undefined
       )
   );
 
@@ -287,9 +339,7 @@ const normalizeQuestion = (
   }
 
   const options =
-    Array.isArray(
-      question.options
-    )
+    Array.isArray(question.options)
       ? question.options
       : [
           question.choice_a,
@@ -312,9 +362,7 @@ const normalizeQuestion = (
 // POINTS
 // ============================================================
 
-const getEarnedPoints = (
-  data
-) =>
+const getEarnedPoints = (data) =>
   Number(
     data?.score_earned ??
       data?.points_earned ??
@@ -341,9 +389,7 @@ const getCorrectAnswer = (
 // STATS NORMALIZER
 // ============================================================
 
-const normalizeStats = (
-  data
-) => {
+const normalizeStats = (data) => {
   const stats = data || {};
 
   const score =
@@ -378,15 +424,10 @@ const normalizeStats = (
     stats.level ||
     "Level 1";
 
-  if (
-    typeof level ===
-    "number"
-  ) {
-    level =
-      `Level ${level}`;
+  if (typeof level === "number") {
+    level = `Level ${level}`;
   } else if (
-    typeof level ===
-      "string" &&
+    typeof level === "string" &&
     !level
       .toLowerCase()
       .startsWith("level")
@@ -395,9 +436,7 @@ const normalizeStats = (
       Number(level);
 
     if (
-      Number.isFinite(
-        numericLevel
-      )
+      Number.isFinite(numericLevel)
     ) {
       level =
         `Level ${numericLevel}`;
@@ -407,13 +446,10 @@ const normalizeStats = (
   return {
     score,
     correct,
-
     wrong: Math.max(
       0,
-      totalAnswered -
-        correct
+      totalAnswered - correct
     ),
-
     totalAnswered,
     successRate,
     level,
@@ -436,9 +472,7 @@ const normalizeAssessment = (
       assessment.questions
     )
       ? assessment.questions
-          .map(
-            normalizeQuestion
-          )
+          .map(normalizeQuestion)
           .filter(Boolean)
       : [];
 
@@ -448,9 +482,7 @@ const normalizeAssessment = (
       0
   );
 
-  if (
-    !Number.isFinite(correct)
-  ) {
+  if (!Number.isFinite(correct)) {
     correct = 0;
   }
 
@@ -465,8 +497,7 @@ const normalizeAssessment = (
     !Number.isFinite(total) ||
     total < 0
   ) {
-    total =
-      questions.length;
+    total = questions.length;
   }
 
   let score = Number(
@@ -475,30 +506,25 @@ const normalizeAssessment = (
       0
   );
 
-  if (
-    !Number.isFinite(score)
-  ) {
+  if (!Number.isFinite(score)) {
     score = 0;
   }
 
   let status =
-    assessment.status ??
-    null;
+    assessment.status ?? null;
 
   if (
     !status &&
     assessment.attempted
   ) {
     status =
-      score >=
-      PASSING_SCORE
+      score >= PASSING_SCORE
         ? "passed"
         : "failed";
   }
 
   const locked =
-    assessment.locked ===
-      true ||
+    assessment.locked === true ||
     status === "passed";
 
   return {
@@ -513,8 +539,7 @@ const normalizeAssessment = (
     locked,
 
     passed:
-      assessment.passed ===
-        true ||
+      assessment.passed === true ||
       status === "passed",
 
     can_retake:
@@ -552,12 +577,10 @@ const getSavedFlashcardProgress =
 
       return {
         answered:
-          parsed?.answered ||
-          {},
+          parsed?.answered || {},
 
         results:
-          parsed?.results ||
-          {},
+          parsed?.results || {},
 
         index:
           Number(
@@ -571,22 +594,57 @@ const getSavedFlashcardProgress =
     }
   };
 
-const saveFlashcardProgress =
-  (progress) => {
-    try {
-      localStorage.setItem(
-        FLASHCARD_STORAGE_KEY,
-        JSON.stringify(
-          progress
-        )
+const saveFlashcardProgress = (
+  progress
+) => {
+  try {
+    localStorage.setItem(
+      FLASHCARD_STORAGE_KEY,
+      JSON.stringify(progress)
+    );
+  } catch (error) {
+    console.warn(
+      "Unable to save flashcard progress:",
+      error
+    );
+  }
+};
+
+// ============================================================
+// CLEAR OLD HOMEPAGE CACHE
+// ============================================================
+
+const clearOldHomepageCaches = () => {
+  try {
+    const keys =
+      Object.keys(localStorage).filter(
+        (key) =>
+          key.startsWith(
+            OLD_CACHE_PREFIX
+          )
       );
-    } catch (error) {
-      console.warn(
-        "Unable to save flashcard progress:",
-        error
+
+    if (keys.length > 0) {
+      console.log(
+        "[ProbLearn Cache] Removing old homepage caches:",
+        keys
+      );
+
+      keys.forEach((key) => {
+        localStorage.removeItem(key);
+      });
+
+      console.log(
+        "[ProbLearn Cache] Old homepage caches removed."
       );
     }
-  };
+  } catch (error) {
+    console.warn(
+      "[ProbLearn Cache] Unable to clear old caches:",
+      error
+    );
+  }
+};
 
 // ============================================================
 // HOMEPAGE
@@ -723,10 +781,19 @@ const Homepage = () => {
   // FLASHCARDS
   // ==========================================================
 
+  const savedFlashProgress =
+    useMemo(
+      () =>
+        getSavedFlashcardProgress(),
+      []
+    );
+
   const [
     flashIndex,
     setFlashIndex,
-  ] = useState(0);
+  ] = useState(
+    savedFlashProgress.index
+  );
 
   const [
     flashFlipped,
@@ -746,12 +813,16 @@ const Homepage = () => {
   const [
     flashAnswered,
     setFlashAnswered,
-  ] = useState({});
+  ] = useState(
+    savedFlashProgress.answered
+  );
 
   const [
     flashResults,
     setFlashResults,
-  ] = useState({});
+  ] = useState(
+    savedFlashProgress.results
+  );
 
   // ==========================================================
   // ASSESSMENTS
@@ -791,6 +862,17 @@ const Homepage = () => {
 
   const loadRequestRef =
     useRef(0);
+
+  const initialLoadRef =
+    useRef(false);
+
+  // ==========================================================
+  // CLEAR OLD CACHE ON MOUNT
+  // ==========================================================
+
+  useEffect(() => {
+    clearOldHomepageCaches();
+  }, []);
 
   // ==========================================================
   // TOAST
@@ -890,218 +972,12 @@ const Homepage = () => {
     }, []);
 
   // ==========================================================
-  // APPLY CACHED DATA
-  // ==========================================================
-
-  const applyCachedData =
-    useCallback(
-      (cache) => {
-        if (!cache?.data) {
-          return false;
-        }
-
-        const data =
-          cache.data;
-
-        // --------------------------
-        // LESSONS
-        // --------------------------
-
-        if (
-          Array.isArray(
-            data.lessons
-          )
-        ) {
-          setLessons(
-            data.lessons
-          );
-        }
-
-        // --------------------------
-        // TOPICS
-        // --------------------------
-
-        if (
-          Array.isArray(
-            data.topics
-          )
-        ) {
-          setTopics(
-            data.topics
-          );
-        }
-
-        // --------------------------
-        // PRACTICE
-        // --------------------------
-
-        if (
-          Array.isArray(
-            data.practiceProblems
-          )
-        ) {
-          setPracticeProblems(
-            data.practiceProblems
-          );
-        }
-
-        // --------------------------
-        // FLASHCARDS
-        // --------------------------
-
-        if (
-          Array.isArray(
-            data.flashCards
-          )
-        ) {
-          setFlashCards(
-            data.flashCards
-          );
-        }
-
-        // --------------------------
-        // ASSESSMENTS
-        // --------------------------
-
-        if (
-          Array.isArray(
-            data.assessments
-          )
-        ) {
-          setAssessments(
-            data.assessments
-          );
-        }
-
-        // --------------------------
-        // USER
-        // --------------------------
-
-        if (data.user) {
-          setUser(
-            data.user
-          );
-        }
-
-        // --------------------------
-        // PROGRESS
-        // --------------------------
-
-        if (data.userStats) {
-          setUserStats(
-            data.userStats
-          );
-        }
-
-        // --------------------------
-        // FLASHCARD PROGRESS
-        // --------------------------
-
-        if (
-          data.flashAnswered
-        ) {
-          setFlashAnswered(
-            data.flashAnswered
-          );
-        }
-
-        if (
-          data.flashResults
-        ) {
-          setFlashResults(
-            data.flashResults
-          );
-        }
-
-        if (
-          Number.isFinite(
-            Number(
-              data.flashIndex
-            )
-          )
-        ) {
-          setFlashIndex(
-            Number(
-              data.flashIndex
-            )
-          );
-        }
-
-        return true;
-      },
-      []
-    );
-
-  // ==========================================================
-  // BUILD CACHE DATA
-  // ==========================================================
-
-  const buildCacheData =
-    useCallback(() => {
-      return {
-        user,
-        lessons,
-        topics,
-        practiceProblems,
-        flashCards,
-        assessments,
-        userStats,
-        flashAnswered,
-        flashResults,
-        flashIndex,
-      };
-    }, [
-      user,
-      lessons,
-      topics,
-      practiceProblems,
-      flashCards,
-      assessments,
-      userStats,
-      flashAnswered,
-      flashResults,
-      flashIndex,
-    ]);
-
-  // ==========================================================
-  // REFRESH PROGRESS
-  // ==========================================================
-
-  const refreshProgress =
-    useCallback(async () => {
-      try {
-        const response =
-          await apiFetch(
-            "/progress"
-          );
-
-        const progressData =
-          getObjectData(
-            response
-          );
-
-        const normalized =
-          normalizeStats(
-            progressData
-          );
-
-        setUserStats(
-          normalized
-        );
-
-        return normalized;
-      } catch (err) {
-        console.error(
-          "Unable to refresh progress:",
-          err
-        );
-
-        return null;
-      }
-    }, []);
-
-  // ==========================================================
   // LOAD HOMEPAGE DATA
+  //
+  // IMPORTANT:
+  // SERVER IS THE ONLY SOURCE OF TRUTH.
+  //
+  // NO HOMEPAGE CACHE.
   // ==========================================================
 
   const loadHomepageData =
@@ -1112,98 +988,120 @@ const Homepage = () => {
         const requestId =
           ++loadRequestRef.current;
 
+        console.group(
+          `%c[ProbLearn] Homepage Load #${requestId}`,
+          "font-weight:bold"
+        );
+
+        console.log(
+          "API URL:",
+          API_URL
+        );
+
+        console.log(
+          "Force refresh:",
+          forceRefresh
+        );
+
+        console.log(
+          "Auth token exists:",
+          Boolean(
+            getAuthToken()
+          )
+        );
+
         try {
           setError(null);
+          setLoading(true);
 
           // ==================================================
-          // USER FIRST
+          // USER
           // ==================================================
 
           let currentUser =
-            user;
+            null;
 
-          if (!currentUser) {
-            try {
-              const cachedUserRaw =
-                localStorage.getItem(
-                  "problearn_cached_user"
+          try {
+            const cachedUserRaw =
+              localStorage.getItem(
+                "problearn_cached_user"
+              );
+
+            if (cachedUserRaw) {
+              const cachedUser =
+                JSON.parse(
+                  cachedUserRaw
                 );
 
               if (
-                cachedUserRaw
-              ) {
-                const cachedUser =
-                  JSON.parse(
-                    cachedUserRaw
-                  );
-
-                if (
-                  cachedUser
-                ) {
-                  currentUser =
-                    cachedUser;
-
-                  setUser(
-                    cachedUser
-                  );
-                }
-              }
-            } catch {
-              // Ignore invalid cached user.
-            }
-          }
-
-          // ==================================================
-          // FETCH USER
-          // ==================================================
-
-          if (
-            !currentUser ||
-            forceRefresh
-          ) {
-            try {
-              const userResponse =
-                await apiFetch(
-                  "/user"
-                );
-
-              const fetchedUser =
-                normalizeUser(
-                  userResponse
-                );
-
-              if (
-                fetchedUser
+                cachedUser?.id
               ) {
                 currentUser =
-                  fetchedUser;
+                  cachedUser;
 
-                setUser(
-                  fetchedUser
+                console.log(
+                  "[USER] Cached user fallback:",
+                  cachedUser
                 );
-
-                try {
-                  localStorage.setItem(
-                    "problearn_cached_user",
-                    JSON.stringify(
-                      fetchedUser
-                    )
-                  );
-                } catch {
-                  // Ignore cache errors.
-                }
               }
-            } catch (err) {
-              if (
-                !currentUser
-              ) {
-                throw err;
-              }
+            }
+          } catch (cacheError) {
+            console.warn(
+              "[USER] Invalid cached user:",
+              cacheError
+            );
+          }
 
-              console.warn(
-                "Using cached user:",
-                err
+          // Always ask server for current user.
+
+          try {
+            const userResponse =
+              await apiFetch(
+                "/user"
               );
+
+            console.log(
+              "[USER] Raw response:",
+              userResponse
+            );
+
+            const fetchedUser =
+              normalizeUser(
+                userResponse
+              );
+
+            console.log(
+              "[USER] Normalized:",
+              fetchedUser
+            );
+
+            if (
+              fetchedUser?.id
+            ) {
+              currentUser =
+                fetchedUser;
+
+              setUser(
+                fetchedUser
+              );
+
+              localStorage.setItem(
+                "problearn_cached_user",
+                JSON.stringify(
+                  fetchedUser
+                )
+              );
+            }
+          } catch (userError) {
+            console.error(
+              "[USER] Server request failed:",
+              userError
+            );
+
+            if (
+              !currentUser?.id
+            ) {
+              throw userError;
             }
           }
 
@@ -1215,67 +1113,13 @@ const Homepage = () => {
             );
           }
 
-          const userId =
-            currentUser.id;
+          console.log(
+            "[USER] FINAL USER:",
+            currentUser
+          );
 
           // ==================================================
-          // CACHE
-          // ==================================================
-
-          const cache =
-            readCache(userId);
-
-          const cacheAge =
-            cache?.timestamp
-              ? Date.now() -
-                cache.timestamp
-              : Infinity;
-
-          const hasCache =
-            Boolean(
-              cache?.data
-            );
-
-          // ==================================================
-          // SHOW CACHE IMMEDIATELY
-          // ==================================================
-
-          if (
-            hasCache &&
-            !forceRefresh
-          ) {
-            applyCachedData(
-              cache
-            );
-
-            // We already have usable
-            // content, so remove the
-            // blocking loading screen.
-            setLoading(false);
-          } else if (
-            !hasCache
-          ) {
-            setLoading(true);
-          }
-
-          // ==================================================
-          // FETCH CONTENT
-          // ==================================================
-
-          const shouldRefreshContent =
-            forceRefresh ||
-            !hasCache ||
-            cacheAge >
-              CONTENT_CACHE_TTL;
-
-          const shouldRefreshProgress =
-            forceRefresh ||
-            !hasCache ||
-            cacheAge >
-              PROGRESS_CACHE_TTL;
-
-          // ==================================================
-          // CONTENT REQUESTS
+          // FETCH ALL SERVER DATA
           // ==================================================
 
           const [
@@ -1287,61 +1131,80 @@ const Homepage = () => {
             progressResult,
           ] =
             await Promise.allSettled([
-              shouldRefreshContent
-                ? apiFetch(
-                    "/lessons"
-                  )
-                : Promise.resolve(
-                    null
-                  ),
+              apiFetch("/lessons"),
 
-              shouldRefreshContent
-                ? apiFetch(
-                    "/topics"
-                  )
-                : Promise.resolve(
-                    null
-                  ),
+              apiFetch("/topics"),
 
-              shouldRefreshContent
-                ? apiFetch(
-                    "/questions/practice"
-                  )
-                : Promise.resolve(
-                    null
-                  ),
+              apiFetch(
+                "/questions/practice"
+              ),
 
-              shouldRefreshContent
-                ? apiFetch(
-                    "/questions/flashcards"
-                  )
-                : Promise.resolve(
-                    null
-                  ),
+              apiFetch(
+                "/questions/flashcards"
+              ),
 
-              shouldRefreshContent
-                ? apiFetch(
-                    "/assessments"
-                  )
-                : Promise.resolve(
-                    null
-                  ),
+              apiFetch(
+                "/assessments"
+              ),
 
-              shouldRefreshProgress
-                ? apiFetch(
-                    "/progress"
-                  )
-                : Promise.resolve(
-                    null
-                  ),
+              apiFetch("/progress"),
             ]);
 
-          // Ignore an old request
-          // finishing after a newer one.
+          // ==================================================
+          // RAW DEBUG
+          // ==================================================
+
+          console.group(
+            "[ProbLearn] RAW API RESULTS"
+          );
+
+          console.log(
+            "LESSONS RESULT:",
+            lessonsResult
+          );
+
+          console.log(
+            "TOPICS RESULT:",
+            topicsResult
+          );
+
+          console.log(
+            "PRACTICE RESULT:",
+            practiceResult
+          );
+
+          console.log(
+            "FLASHCARD RESULT:",
+            flashcardResult
+          );
+
+          console.log(
+            "ASSESSMENT RESULT:",
+            assessmentResult
+          );
+
+          console.log(
+            "PROGRESS RESULT:",
+            progressResult
+          );
+
+          console.groupEnd();
+
+          // ==================================================
+          // REQUEST PROTECTION
+          // ==================================================
+
           if (
             requestId !==
             loadRequestRef.current
           ) {
+            console.warn(
+              "Ignoring outdated homepage request:",
+              requestId
+            );
+
+            console.groupEnd();
+
             return;
           }
 
@@ -1349,30 +1212,34 @@ const Homepage = () => {
           // LESSONS
           // ==================================================
 
-          let finalLessons =
-            lessons;
+          let finalLessons = [];
 
           if (
             lessonsResult.status ===
-              "fulfilled" &&
-            lessonsResult.value
+            "fulfilled"
           ) {
-            const data =
-              lessonsResult.value
-                ?.lessons ??
-              lessonsResult.value
-                ?.data?.lessons ??
-              lessonsResult.value
-                ?.data ??
-              [];
-
             finalLessons =
-              Array.isArray(data)
-                ? data
-                : [];
+              extractLessons(
+                lessonsResult.value
+              );
+
+            console.log(
+              "[LESSONS] Count:",
+              finalLessons.length
+            );
+
+            console.log(
+              "[LESSONS] Data:",
+              finalLessons
+            );
 
             setLessons(
               finalLessons
+            );
+          } else {
+            console.error(
+              "[LESSONS] FAILED:",
+              lessonsResult.reason
             );
           }
 
@@ -1380,227 +1247,472 @@ const Homepage = () => {
           // TOPICS
           // ==================================================
 
-          let finalTopics =
-            topics;
+          let finalTopics = [];
 
           if (
             topicsResult.status ===
-              "fulfilled" &&
-            topicsResult.value
+            "fulfilled"
           ) {
-            const data =
+            finalTopics =
               getArrayData(
                 topicsResult.value
               );
 
-            finalTopics =
-              data;
+            console.log(
+              "[TOPICS] Direct endpoint count:",
+              finalTopics.length
+            );
+
+            console.log(
+              "[TOPICS] Direct endpoint data:",
+              finalTopics
+            );
+
+            // If /topics returned nothing,
+            // use topics embedded inside lessons.
+
+            if (
+              finalTopics.length === 0 &&
+              finalLessons.length > 0
+            ) {
+              finalTopics =
+                extractTopicsFromLessons(
+                  finalLessons
+                );
+
+              console.log(
+                "[TOPICS] FALLBACK from lessons:",
+                finalTopics.length
+              );
+            }
 
             setTopics(
               finalTopics
             );
+          } else {
+            console.error(
+              "[TOPICS] FAILED:",
+              topicsResult.reason
+            );
+
+            if (
+              finalLessons.length > 0
+            ) {
+              finalTopics =
+                extractTopicsFromLessons(
+                  finalLessons
+                );
+
+              setTopics(
+                finalTopics
+              );
+
+              console.log(
+                "[TOPICS] FALLBACK from lessons after API failure:",
+                finalTopics.length
+              );
+            }
           }
 
           // ==================================================
-          // PRACTICE
+          // PRACTICE QUESTIONS
           // ==================================================
 
-          let finalPractice =
-            practiceProblems;
+          let finalPractice = [];
 
           if (
             practiceResult.status ===
-              "fulfilled" &&
-            practiceResult.value
+            "fulfilled"
           ) {
+            const rawPractice =
+              practiceResult.value;
+
+            console.log(
+              "[PRACTICE] Raw data:",
+              rawPractice
+            );
+
             finalPractice =
               getArrayData(
-                practiceResult.value
+                rawPractice
               )
                 .map(
                   normalizeQuestion
                 )
                 .filter(Boolean);
 
+            console.log(
+              "[PRACTICE] Parsed count:",
+              finalPractice.length
+            );
+
+            console.log(
+              "[PRACTICE] Parsed data:",
+              finalPractice
+            );
+
             setPracticeProblems(
               finalPractice
             );
+          } else {
+            console.error(
+              "[PRACTICE] FAILED:",
+              practiceResult.reason
+            );
+
+            setPracticeProblems([]);
           }
 
           // ==================================================
           // FLASHCARDS
           // ==================================================
 
-          let finalFlashCards =
-            flashCards;
+          let finalFlashCards = [];
 
           if (
             flashcardResult.status ===
-              "fulfilled" &&
-            flashcardResult.value
+            "fulfilled"
           ) {
+            const rawFlashcards =
+              flashcardResult.value;
+
+            console.log(
+              "[FLASHCARDS] Raw data:",
+              rawFlashcards
+            );
+
             finalFlashCards =
               getArrayData(
-                flashcardResult.value
+                rawFlashcards
               )
                 .map(
                   normalizeQuestion
                 )
                 .filter(Boolean);
 
+            console.log(
+              "[FLASHCARDS] Parsed count:",
+              finalFlashCards.length
+            );
+
+            console.log(
+              "[FLASHCARDS] Parsed data:",
+              finalFlashCards
+            );
+
             setFlashCards(
               finalFlashCards
             );
+
+            setFlashIndex(
+              (previous) => {
+                if (
+                  finalFlashCards.length ===
+                  0
+                ) {
+                  return 0;
+                }
+
+                return Math.min(
+                  previous,
+                  finalFlashCards.length -
+                    1
+                );
+              }
+            );
+          } else {
+            console.error(
+              "[FLASHCARDS] FAILED:",
+              flashcardResult.reason
+            );
+
+            setFlashCards([]);
           }
 
           // ==================================================
           // ASSESSMENTS
           // ==================================================
 
-          let finalAssessments =
-            assessments;
+          let finalAssessments = [];
 
           if (
             assessmentResult.status ===
-              "fulfilled" &&
-            assessmentResult.value
+            "fulfilled"
           ) {
+            const rawAssessments =
+              assessmentResult.value;
+
+            console.log(
+              "[ASSESSMENTS] Raw endpoint response:",
+              rawAssessments
+            );
+
             finalAssessments =
               getArrayData(
-                assessmentResult.value
+                rawAssessments
               )
                 .map(
                   normalizeAssessment
                 )
                 .filter(Boolean);
 
-            setAssessments(
+            console.log(
+              "[ASSESSMENTS] Direct endpoint count:",
+              finalAssessments.length
+            );
+
+            console.log(
+              "[ASSESSMENTS] Direct endpoint parsed:",
               finalAssessments
             );
+          } else {
+            console.error(
+              "[ASSESSMENTS] Endpoint FAILED:",
+              assessmentResult.reason
+            );
           }
+
+          // ==================================================
+          // CRITICAL FALLBACK
+          //
+          // Your localStorage showed:
+          //
+          // lessons
+          //   -> topics
+          //      -> assessments
+          //
+          // Therefore if /assessments gives ZERO,
+          // extract them directly from /lessons.
+          // ==================================================
+
+          if (
+            finalAssessments.length === 0 &&
+            finalLessons.length > 0
+          ) {
+            const nestedAssessments =
+              extractAssessmentsFromLessons(
+                finalLessons
+              );
+
+            console.log(
+              "[ASSESSMENTS] FALLBACK from lessons:",
+              nestedAssessments.length
+            );
+
+            console.log(
+              "[ASSESSMENTS] FALLBACK DATA:",
+              nestedAssessments
+            );
+
+            finalAssessments =
+              nestedAssessments
+                .map(
+                  normalizeAssessment
+                )
+                .filter(Boolean);
+          }
+
+          console.log(
+            "[ASSESSMENTS] FINAL COUNT:",
+            finalAssessments.length
+          );
+
+          console.log(
+            "[ASSESSMENTS] FINAL DATA:",
+            finalAssessments
+          );
+
+          setAssessments(
+            finalAssessments
+          );
 
           // ==================================================
           // PROGRESS
           // ==================================================
 
-          let finalUserStats =
-            userStats;
-
           if (
             progressResult.status ===
-              "fulfilled" &&
-            progressResult.value
+            "fulfilled"
           ) {
-            finalUserStats =
+            console.log(
+              "[PROGRESS] Raw:",
+              progressResult.value
+            );
+
+            const normalized =
               normalizeStats(
                 getObjectData(
                   progressResult.value
                 )
               );
 
+            console.log(
+              "[PROGRESS] Normalized:",
+              normalized
+            );
+
             setUserStats(
-              finalUserStats
+              normalized
+            );
+          } else {
+            console.error(
+              "[PROGRESS] FAILED:",
+              progressResult.reason
             );
           }
 
           // ==================================================
-          // NO LESSONS
+          // FINAL DEBUG SUMMARY
           // ==================================================
 
-          if (
-            finalLessons.length ===
-            0
-          ) {
-            setPracticeProblems(
-              []
-            );
-
-            setFlashCards([]);
-
-            setAssessments([]);
-
-            finalPractice = [];
-            finalFlashCards = [];
-            finalAssessments = [];
-          }
-
-          // ==================================================
-          // SAVE CACHE
-          // ==================================================
-
-          writeCache(
-            userId,
-            {
-              user:
-                currentUser,
-
-              lessons:
-                finalLessons,
-
-              topics:
-                finalTopics,
-
-              practiceProblems:
-                finalPractice,
-
-              flashCards:
-                finalFlashCards,
-
-              assessments:
-                finalAssessments,
-
-              userStats:
-                finalUserStats,
-
-              flashAnswered,
-
-              flashResults,
-
-              flashIndex,
-            }
+          console.group(
+            "%c[ProbLearn] FINAL HOMEPAGE COUNTS",
+            "font-weight:bold;color:green"
           );
 
+          console.table({
+            userId:
+              currentUser?.id,
+
+            username:
+              currentUser?.username,
+
+            lessons:
+              finalLessons.length,
+
+            topics:
+              finalTopics.length,
+
+            practiceQuestions:
+              finalPractice.length,
+
+            flashcards:
+              finalFlashCards.length,
+
+            assessments:
+              finalAssessments.length,
+          });
+
+          console.log(
+            "Final lessons:",
+            finalLessons
+          );
+
+          console.log(
+            "Final topics:",
+            finalTopics
+          );
+
+          console.log(
+            "Final practice:",
+            finalPractice
+          );
+
+          console.log(
+            "Final flashcards:",
+            finalFlashCards
+          );
+
+          console.log(
+            "Final assessments:",
+            finalAssessments
+          );
+
+          console.groupEnd();
+
+          // ==================================================
+          // FAILURE SUMMARY
+          // ==================================================
+
+          const failures = [];
+
+          if (
+            lessonsResult.status ===
+            "rejected"
+          ) {
+            failures.push(
+              "lessons"
+            );
+          }
+
+          if (
+            topicsResult.status ===
+            "rejected"
+          ) {
+            failures.push(
+              "topics"
+            );
+          }
+
+          if (
+            practiceResult.status ===
+            "rejected"
+          ) {
+            failures.push(
+              "practice"
+            );
+          }
+
+          if (
+            flashcardResult.status ===
+            "rejected"
+          ) {
+            failures.push(
+              "flashcards"
+            );
+          }
+
+          if (
+            assessmentResult.status ===
+            "rejected"
+          ) {
+            failures.push(
+              "assessments"
+            );
+          }
+
+          if (
+            progressResult.status ===
+            "rejected"
+          ) {
+            failures.push(
+              "progress"
+            );
+          }
+
+          if (
+            failures.length > 0
+          ) {
+            console.warn(
+              "[ProbLearn] API failures:",
+              failures
+            );
+          }
+
           setLoading(false);
+
+          console.log(
+            "[ProbLearn] Homepage loading COMPLETE."
+          );
+
+          console.groupEnd();
         } catch (err) {
           console.error(
-            "Homepage loading error:",
+            "[ProbLearn] Homepage loading ERROR:",
             err
           );
 
-          // Don't destroy cached UI
-          // if the background refresh
-          // failed.
-          const hasExistingData =
-            lessons.length > 0 ||
-            practiceProblems.length >
-              0 ||
-            flashCards.length > 0 ||
-            assessments.length >
-              0;
-
-          if (!hasExistingData) {
-            setError(
-              err?.message ||
-                "Unable to load learning data."
-            );
-          }
+          setError(
+            err?.message ||
+              "Unable to load learning data."
+          );
 
           setLoading(false);
+
+          console.groupEnd();
         }
       },
-      [
-        user,
-        lessons,
-        topics,
-        practiceProblems,
-        flashCards,
-        assessments,
-        userStats,
-        flashAnswered,
-        flashResults,
-        flashIndex,
-        applyCachedData,
-      ]
+      []
     );
 
   // ==========================================================
@@ -1608,23 +1720,34 @@ const Homepage = () => {
   // ==========================================================
 
   useEffect(() => {
-    loadHomepageData();
-  }, []);
-
-  // ==========================================================
-  // SAVE FLASHCARD PROGRESS
-  // ==========================================================
-
-  useEffect(() => {
-    if (loading) {
+    if (
+      initialLoadRef.current
+    ) {
       return;
     }
 
+    initialLoadRef.current =
+      true;
+
+    console.log(
+      "[ProbLearn] Initial homepage load..."
+    );
+
+    loadHomepageData();
+  }, [loadHomepageData]);
+
+  // ==========================================================
+  // FLASHCARD PROGRESS STORAGE
+  // ==========================================================
+
+  useEffect(() => {
     saveFlashcardProgress({
       answered:
         flashAnswered,
+
       results:
         flashResults,
+
       index:
         flashIndex,
     });
@@ -1632,35 +1755,6 @@ const Homepage = () => {
     flashAnswered,
     flashResults,
     flashIndex,
-    loading,
-  ]);
-
-  // ==========================================================
-  // UPDATE CACHE AFTER IMPORTANT STATE CHANGES
-  // ==========================================================
-
-  useEffect(() => {
-    if (
-      loading ||
-      !user?.id
-    ) {
-      return;
-    }
-
-    const timeout =
-      setTimeout(() => {
-        writeCache(
-          user.id,
-          buildCacheData()
-        );
-      }, 300);
-
-    return () =>
-      clearTimeout(timeout);
-  }, [
-    loading,
-    user?.id,
-    buildCacheData,
   ]);
 
   // ==========================================================
@@ -1717,9 +1811,19 @@ const Homepage = () => {
             difficulty
         );
 
+      console.log(
+        "[PRACTICE] Generate:",
+        {
+          difficulty,
+          total:
+            practiceProblems.length,
+          matching:
+            filtered.length,
+        }
+      );
+
       if (
-        filtered.length ===
-        0
+        filtered.length === 0
       ) {
         showToast(
           "No questions available for this difficulty.",
@@ -1780,6 +1884,45 @@ const Homepage = () => {
   ]);
 
   // ==========================================================
+  // REFRESH PROGRESS
+  // ==========================================================
+
+  const refreshProgress =
+    useCallback(async () => {
+      try {
+        const response =
+          await apiFetch(
+            "/progress"
+          );
+
+        const normalized =
+          normalizeStats(
+            getObjectData(
+              response
+            )
+          );
+
+        setUserStats(
+          normalized
+        );
+
+        console.log(
+          "[PROGRESS] Refreshed:",
+          normalized
+        );
+
+        return normalized;
+      } catch (err) {
+        console.error(
+          "Unable to refresh progress:",
+          err
+        );
+
+        return null;
+      }
+    }, []);
+
+  // ==========================================================
   // PRACTICE ANSWER
   // ==========================================================
 
@@ -1805,6 +1948,15 @@ const Homepage = () => {
             answerIndex
           );
 
+          console.log(
+            "[PRACTICE] Submitting:",
+            {
+              question_id:
+                currentPractice.id,
+              answer,
+            }
+          );
+
           const response =
             await apiFetch(
               "/practice/answer",
@@ -1824,6 +1976,11 @@ const Homepage = () => {
             getObjectData(
               response
             );
+
+          console.log(
+            "[PRACTICE] Answer result:",
+            resultData
+          );
 
           setPracticeAnswered(
             true
@@ -1890,6 +2047,7 @@ const Homepage = () => {
         flashCards[
           flashIndex
         ] || null,
+
       [
         flashCards,
         flashIndex,
@@ -1908,6 +2066,7 @@ const Homepage = () => {
               currentFlashCardId
             ] || null
           : null,
+
       [
         currentFlashCardId,
         flashResults,
@@ -1924,6 +2083,7 @@ const Homepage = () => {
               ]
             )
           : false,
+
       [
         currentFlashCardId,
         flashAnswered,
@@ -1981,6 +2141,7 @@ const Homepage = () => {
           setFlashResults(
             (previous) => ({
               ...previous,
+
               [cardId]:
                 resultData,
             })
@@ -2094,12 +2255,17 @@ const Homepage = () => {
       }
 
       setFlashIndex(0);
+
       setFlashFlipped(
         false
       );
+
       setFlashCorrect(0);
+
       setFlashWrong(0);
+
       setFlashAnswered({});
+
       setFlashResults({});
 
       localStorage.removeItem(
@@ -2122,12 +2288,9 @@ const Homepage = () => {
         assessmentAnswers[
           assessmentId
         ] || {},
+
       [assessmentAnswers]
     );
-
-  // ==========================================================
-  // ASSESSMENT ANSWER
-  // ==========================================================
 
   const handleAssessmentAnswer =
     useCallback(
@@ -2200,7 +2363,7 @@ const Homepage = () => {
     );
 
   // ==========================================================
-  // START / RETRY ASSESSMENT
+  // START ASSESSMENT
   // ==========================================================
 
   const startAssessment =
@@ -2214,6 +2377,11 @@ const Homepage = () => {
           );
 
         try {
+          console.log(
+            "[ASSESSMENT] Starting:",
+            numericId
+          );
+
           const existing =
             assessments.find(
               (item) =>
@@ -2221,6 +2389,11 @@ const Homepage = () => {
                   item.id
                 ) === numericId
             );
+
+          console.log(
+            "[ASSESSMENT] Existing assessment:",
+            existing
+          );
 
           if (
             existing?.locked ||
@@ -2249,6 +2422,11 @@ const Homepage = () => {
               `/assessments/${numericId}`
             );
 
+          console.log(
+            "[ASSESSMENT] Detail response:",
+            response
+          );
+
           const assessment =
             getObjectData(
               response
@@ -2258,6 +2436,11 @@ const Homepage = () => {
             normalizeAssessment(
               assessment
             );
+
+          console.log(
+            "[ASSESSMENT] Normalized detail:",
+            normalized
+          );
 
           if (
             normalized?.locked ||
@@ -2274,10 +2457,12 @@ const Homepage = () => {
                       ? {
                           ...item,
                           ...normalized,
+
                           locked: true,
                           passed: true,
                           status:
                             "passed",
+
                           can_retake:
                             false,
                         }
@@ -2306,7 +2491,8 @@ const Homepage = () => {
 
                         questions:
                           normalized?.questions ??
-                          item.questions,
+                          item.questions ??
+                          [],
                       }
                     : item
               )
@@ -2325,41 +2511,6 @@ const Homepage = () => {
             "Start assessment error:",
             err
           );
-
-          if (
-            err?.message
-              ?.toLowerCase()
-              .includes(
-                "already passed"
-              )
-          ) {
-            setAssessments(
-              (previous) =>
-                previous.map(
-                  (item) =>
-                    Number(
-                      item.id
-                    ) === numericId
-                      ? {
-                          ...item,
-                          locked: true,
-                          passed: true,
-                          status:
-                            "passed",
-                          can_retake:
-                            false,
-                        }
-                      : item
-                )
-            );
-
-            showToast(
-              "🔒 You already passed this assessment. It is locked.",
-              "info"
-            );
-
-            return;
-          }
 
           showToast(
             err?.message ||
@@ -2430,6 +2581,16 @@ const Homepage = () => {
             ? assessment.questions
             : [];
 
+        console.log(
+          "[ASSESSMENT] Submit:",
+          {
+            assessmentId,
+            questionCount:
+              questions.length,
+            assessment,
+          }
+        );
+
         if (
           questions.length === 0
         ) {
@@ -2480,8 +2641,7 @@ const Homepage = () => {
           formattedAnswers.filter(
             ({
               answer,
-            }) =>
-              !answer
+            }) => !answer
           );
 
         if (
@@ -2491,6 +2651,11 @@ const Homepage = () => {
             `Please answer all questions before submitting the assessment. ${unanswered.length} question(s) unanswered.`
           );
         }
+
+        console.log(
+          "[ASSESSMENT] Formatted answers:",
+          formattedAnswers
+        );
 
         const response =
           await apiFetch(
@@ -2505,6 +2670,11 @@ const Homepage = () => {
             }
           );
 
+        console.log(
+          "[ASSESSMENT] Submission response:",
+          response
+        );
+
         if (
           !response?.success
         ) {
@@ -2515,13 +2685,11 @@ const Homepage = () => {
         }
 
         const submission =
-          response?.data ||
-          {};
+          response?.data || {};
 
         const score =
           Number(
-            submission.score ??
-              0
+            submission.score ?? 0
           );
 
         const passed =
@@ -2556,7 +2724,7 @@ const Homepage = () => {
           );
 
         // ======================================================
-        // IMMEDIATE STATE UPDATE
+        // UPDATE UI
         // ======================================================
 
         setAssessments(
@@ -2579,11 +2747,8 @@ const Homepage = () => {
                     true,
 
                   correct,
-
                   total,
-
                   score,
-
                   status,
 
                   passed,
@@ -2613,13 +2778,9 @@ const Homepage = () => {
                       1,
 
                     correct,
-
                     total,
-
                     score,
-
                     status,
-
                     passed,
 
                     locked:
@@ -2659,65 +2820,14 @@ const Homepage = () => {
           }
         );
 
-        // ======================================================
-        // CLOSE
-        // ======================================================
-
         closeAssessment();
 
         // ======================================================
-        // UPDATE CACHE IMMEDIATELY
+        // REFRESH SERVER DATA
         // ======================================================
 
-        setTimeout(() => {
-          if (user?.id) {
-            setAssessments(
-              (current) => {
-                writeCache(
-                  user.id,
-                  {
-                    user,
-
-                    lessons,
-
-                    topics,
-
-                    practiceProblems,
-
-                    flashCards,
-
-                    assessments:
-                      current,
-
-                    userStats,
-
-                    flashAnswered,
-
-                    flashResults,
-
-                    flashIndex,
-                  }
-                );
-
-                return current;
-              }
-            );
-          }
-        }, 0);
-
-        // ======================================================
-        // BACKGROUND REFRESH
-        // ======================================================
-
-        loadHomepageData(
+        await loadHomepageData(
           true
-        ).catch(
-          (refreshError) => {
-            console.warn(
-              "Background assessment refresh failed:",
-              refreshError
-            );
-          }
         );
 
         // ======================================================
@@ -2759,15 +2869,6 @@ const Homepage = () => {
       assessments,
       assessmentAnswers,
       closeAssessment,
-      user,
-      lessons,
-      topics,
-      practiceProblems,
-      flashCards,
-      userStats,
-      flashAnswered,
-      flashResults,
-      flashIndex,
       loadHomepageData,
       launchConfetti,
       showToast,
@@ -2790,9 +2891,7 @@ const Homepage = () => {
         ] =
           await Promise.all([
             apiFetch("/user"),
-            apiFetch(
-              "/progress"
-            ),
+            apiFetch("/progress"),
           ]);
 
         const refreshedUser =
@@ -2810,26 +2909,19 @@ const Homepage = () => {
             })
           );
 
-          try {
-            localStorage.setItem(
-              "problearn_cached_user",
-              JSON.stringify(
-                refreshedUser
-              )
-            );
-          } catch {
-            // Ignore.
-          }
-        }
-
-        const progressData =
-          getObjectData(
-            progressResponse
+          localStorage.setItem(
+            "problearn_cached_user",
+            JSON.stringify(
+              refreshedUser
+            )
           );
+        }
 
         const normalized =
           normalizeStats(
-            progressData
+            getObjectData(
+              progressResponse
+            )
           );
 
         setUserStats(
@@ -2884,13 +2976,15 @@ const Homepage = () => {
           }
         }
       } finally {
-        // Clear user cache.
-        clearUserCache(
-          userId
-        );
+        // Clear every old homepage cache.
+        clearOldHomepageCaches();
 
         localStorage.removeItem(
           "problearn_cached_user"
+        );
+
+        localStorage.removeItem(
+          "user"
         );
 
         localStorage.removeItem(
@@ -2935,11 +3029,9 @@ const Homepage = () => {
       "user";
 
     return {
-      displayName:
-        name,
+      displayName: name,
 
-      username:
-        userName,
+      username: userName,
 
       userInitial:
         name
@@ -3010,6 +3102,52 @@ const Homepage = () => {
         )
       );
     }, [userStats.score]);
+
+  // ==========================================================
+  // DEBUG STATE CHANGES
+  // ==========================================================
+
+  useEffect(() => {
+    console.group(
+      "[ProbLearn] React state counts"
+    );
+
+    console.table({
+      lessons:
+        lessons.length,
+
+      topics:
+        topics.length,
+
+      practice:
+        practiceProblems.length,
+
+      flashcards:
+        flashCards.length,
+
+      assessments:
+        assessments.length,
+
+      loading,
+
+      userId:
+        user?.id,
+
+      username:
+        user?.username,
+    });
+
+    console.groupEnd();
+  }, [
+    lessons.length,
+    topics.length,
+    practiceProblems.length,
+    flashCards.length,
+    assessments.length,
+    loading,
+    user?.id,
+    user?.username,
+  ]);
 
   // ==========================================================
   // LOADING
@@ -3164,28 +3302,6 @@ const Homepage = () => {
             }
           />
         )}
-
-        {/* ==================================================
-            GENERATE LESSON - For now this features is not used
-        ================================================== */}
-
-
-        {/*activeSection ===
-          "generate-lesson" && (
-          <GenerateLesson
-            showToast={
-              showToast
-            }
-
-            user={user}
-
-            onLessonGenerated={() =>
-              loadHomepageData(
-                true
-              )
-            }
-          />
-        ) */}
 
         {/* ==================================================
             LEARN
@@ -3409,7 +3525,9 @@ const Homepage = () => {
           setShowProfile
         }
 
-        user={user}
+        user={
+          user
+        }
 
         userInitial={
           userInitial
@@ -3457,10 +3575,13 @@ const Homepage = () => {
       ====================================================== */}
 
       <ResultModal
-        result={result}
+        result={
+          result
+        }
 
         closeResult={() => {
           setResult(null);
+
           setSelectedAssessment(
             null
           );
@@ -3472,7 +3593,9 @@ const Homepage = () => {
       ====================================================== */}
 
       <Toast
-        toast={toast}
+        toast={
+          toast
+        }
       />
     </div>
   );
