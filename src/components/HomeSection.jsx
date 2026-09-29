@@ -49,12 +49,11 @@ const HomeSection = ({
             <div>
 
               <strong>
-                ⭐ {userStats.level}
+                ⭐ {userStats.level} <span>
+                - {userStats.score} points
+              </span>
               </strong>
 
-              <span>
-                {userStats.score} points
-              </span>
 
             </div>
 

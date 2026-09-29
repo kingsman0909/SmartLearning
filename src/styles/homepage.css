@@ -112,8 +112,11 @@
         }
 
         .section.active {
-            display: block;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
         }
+
 
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(20px); }
@@ -711,6 +714,7 @@
             gap: 12px;
             width: 100%;
             margin-top: 15px;
+            background: red;
         }
 
         .option-btn {
@@ -828,7 +832,6 @@
         .progress-bar-container {
             width: 100%;
             height: 8px;
-            background: #e0e0e0;
             border-radius: 10px;
             overflow: hidden;
             margin: 15px 0;
@@ -872,6 +875,363 @@
             color: #666;
             margin-top: 4px;
         }
+
+        
+/* =========================================
+   RESPONSIVE FLASHCARDS FIX
+========================================= */
+
+/* Flashcard section */
+.section.active:has(.flash-card-container) {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: stretch;
+
+    gap: 12px;
+
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+
+    overflow: visible;
+}
+
+/* Flashcard wrapper */
+.flash-card-container {
+    position: relative;
+    perspective: 1000px;
+
+    width: 100%;
+    min-width: 0;
+
+    /* Responsive card height */
+    height: clamp(420px, 65vh, 700px);
+    min-height: 0;
+
+    margin: 10px 0;
+
+    flex-shrink: 0;
+}
+
+/* Actual flipping card */
+.flash-card {
+    position: relative;
+
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+
+    transform-style: preserve-3d;
+    transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+
+    box-sizing: border-box;
+}
+
+/* Front and back */
+.card-front,
+.card-back {
+    position: absolute;
+    inset: 0;
+
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+
+    box-sizing: border-box;
+
+    padding: clamp(15px, 4vw, 40px);
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+
+    /* Content scrolls INSIDE the card */
+    overflow-y: auto;
+    overflow-x: hidden;
+
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+
+    backface-visibility: hidden;
+    border-radius: 20px;
+}
+
+/* Front card content */
+.card-front {
+    justify-content: flex-start;
+
+    padding-top: 65px;
+    padding-bottom: 50px;
+}
+
+/* Question */
+.card-front .question {
+    width: 100%;
+    max-width: 100%;
+
+    font-size: clamp(1rem, 2.5vw, 1.5rem);
+    line-height: 1.5;
+
+    text-align: center;
+
+    margin: 15px 0;
+    overflow-wrap: anywhere;
+}
+
+/* Options */
+.flash-options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+
+    gap: 12px;
+
+    width: 100%;
+    max-width: 100%;
+
+    margin-top: 15px;
+}
+
+.option-btn {
+    min-width: 0;
+    max-width: 100%;
+
+    padding: 12px 15px;
+
+    font-size: clamp(0.85rem, 2vw, 1rem);
+    line-height: 1.4;
+
+    overflow-wrap: anywhere;
+    box-sizing: border-box;
+}
+
+/* Hint stays at the bottom of the card content */
+.card-front .click-hint {
+    position: relative;
+
+    bottom: auto;
+    left: auto;
+
+    margin-top: 20px;
+    padding-bottom: 5px;
+
+    flex-shrink: 0;
+    text-align: center;
+}
+
+/* Back card */
+.card-back {
+    justify-content: flex-start;
+
+    padding-top: 25px;
+    padding-bottom: 25px;
+}
+
+.card-back .explanation {
+    width: 100%;
+    max-width: 100%;
+
+    box-sizing: border-box;
+
+    overflow-wrap: anywhere;
+}
+
+/* Card counter */
+.card-counter {
+    position: relative;
+    z-index: 2;
+
+    width: 100%;
+    flex-shrink: 0;
+
+    text-align: center;
+    margin: 5px 0;
+}
+
+/* Controls ALWAYS below the flashcard */
+.controls {
+    position: relative;
+    z-index: 10;
+
+    display: flex;
+    justify-content: center;
+    align-items: center;
+
+    flex-wrap: wrap;
+    gap: 12px;
+
+    width: 100%;
+    min-width: 0;
+
+    margin: 10px 0 20px;
+    padding: 10px 0;
+
+    box-sizing: border-box;
+}
+
+/* Control buttons */
+.controls button {
+    position: relative;
+    z-index: 11;
+
+    flex: 0 1 auto;
+    min-width: 0;
+
+    justify-content: center;
+    white-space: nowrap;
+
+    padding: 12px 20px;
+    touch-action: manipulation;
+}
+
+/* Statistics */
+.stats-grid {
+    width: 100%;
+    box-sizing: border-box;
+
+    margin-top: 10px;
+    flex-shrink: 0;
+}
+
+/* =========================================
+   TABLETS
+========================================= */
+@media (max-width: 768px) {
+
+    .flash-card-container {
+        height: clamp(400px, 60vh, 600px);
+    }
+
+    .flash-options {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .option-btn {
+        padding: 12px;
+    }
+
+    .controls {
+        gap: 10px;
+    }
+
+    .controls button {
+        padding: 11px 16px;
+        font-size: 0.9rem;
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+/* =========================================
+   MOBILE
+========================================= */
+@media (max-width: 480px) {
+
+    .section.active:has(.flash-card-container) {
+        gap: 8px;
+    }
+
+    .flash-card-container {
+        height: 60vh;
+        min-height: 380px;
+        max-height: 550px;
+
+        margin: 8px 0;
+    }
+
+    .card-front,
+    .card-back {
+        border-radius: 16px;
+        padding-left: 15px;
+        padding-right: 15px;
+    }
+
+    .card-front {
+        padding-top: 60px;
+        padding-bottom: 40px;
+    }
+
+    .card-front .category-tag {
+        top: 12px;
+        left: 12px;
+
+        max-width: 65%;
+        font-size: 0.72rem;
+
+        overflow-wrap: anywhere;
+    }
+
+    .card-front .card-number {
+        top: 12px;
+        right: 12px;
+
+        font-size: 0.72rem;
+        padding: 4px 9px;
+    }
+
+    .card-front .question {
+        font-size: 1rem;
+        line-height: 1.5;
+    }
+
+    .flash-options {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+
+    .option-btn {
+        font-size: 0.85rem;
+        padding: 10px;
+        gap: 8px;
+    }
+
+    .option-btn .letter {
+        width: 26px;
+        height: 26px;
+        line-height: 26px;
+        flex-shrink: 0;
+    }
+
+    .card-front .click-hint {
+        font-size: 0.75rem;
+    }
+
+    /* Two rows of controls on narrow screens */
+    .controls {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+
+        gap: 10px;
+        margin: 10px 0 20px;
+        padding: 5px 0;
+    }
+
+    .controls button {
+        width: 100%;
+        min-width: 0;
+
+        padding: 12px 8px;
+        font-size: 0.82rem;
+
+        white-space: normal;
+    }
+
+    .stats-grid {
+        gap: 12px;
+        padding: 15px;
+    }
+
+    .stat-item .value {
+        font-size: 1.25rem;
+    }
+
+    .stat-item .label {
+        font-size: 0.75rem;
+    }
+}
 
         /* ========== PRACTICE ========== */
         .practice-controls {
@@ -1418,7 +1778,7 @@
     inset: 0;
     width: 100%;
     height: 100%;
-    background: rgba(20, 18, 35, 0.6);
+    background: rgba(20, 18, 35, 0.7);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
 
@@ -1452,7 +1812,8 @@
 
     width: 100%;
     max-width: 620px;
-    max-height: 90vh;
+    height: 90dvh;
+    min-height: 500px;
 
     overflow-y: auto;
 
@@ -3668,3 +4029,476 @@
     }
 }
 
+
+/* =========================================
+   MOBILE SLIDE-IN SIDEBAR
+========================================= */
+
+/* Hide mobile controls on desktop */
+.mobile-menu-toggle,
+.mobile-sidebar,
+.mobile-sidebar-overlay {
+    display: none;
+}
+
+@media (max-width: 500px) {
+
+    /* =====================================
+       HEADER
+    ===================================== */
+
+    .header {
+        position: sticky;
+        top: 0;
+        z-index: 1000;
+        border-radius: 0;
+
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-start;
+
+        background: rgba(243, 243, 243, 0.7);
+        backdrop-filter: blur(6px);
+        border-radius: 6px;
+
+        gap: 12px;
+        padding: 10px 15px;
+
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    /* Hide desktop navigation */
+    .header .nav-buttons {
+        display: none !important;
+    }
+
+    .header .header-stats {
+        display: none;
+    }
+
+    .header .logo {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .header .logo h1 {
+        font-size: 1.15rem;
+        margin: 0;
+    }
+
+    /* Hamburger button */
+    .mobile-menu-toggle {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+
+        gap: 5px;
+
+        width: 40px;
+        height: 40px;
+        flex-shrink: 0;
+
+        padding: 8px;
+        border: none;
+        border-radius: 10px;
+
+        background: transparent;
+        cursor: pointer;
+
+        transition: background 0.2s ease;
+    }
+
+    .mobile-menu-toggle:hover {
+        background: rgba(108, 99, 255, 0.1);
+    }
+
+    .mobile-menu-toggle span {
+        display: block;
+
+        width: 23px;
+        height: 2.5px;
+
+        border-radius: 5px;
+        background: currentColor;
+
+        transition: all 0.2s ease;
+    }
+
+    /* Push profile to the right */
+    .header .user-menu-wrapper {
+        margin-left: auto;
+        flex-shrink: 0;
+    }
+
+    .header .user-mini-info {
+        display: none;
+    }
+
+    .header .user-profile-button {
+        padding: 5px;
+        gap: 5px;
+    }
+
+    .header .user-avatar {
+        width: 35px;
+        height: 35px;
+    }
+
+    /* =====================================
+       SIDEBAR OVERLAY
+    ===================================== */
+
+    .mobile-sidebar-overlay {
+        display: block;
+
+        position: fixed;
+        inset: 0;
+
+        background: rgba(0, 0, 0, 0.55);
+        backdrop-filter: blur(3px);
+        -webkit-backdrop-filter: blur(3px);
+
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+
+        z-index: 9998;
+
+        transition:
+            opacity 0.3s ease,
+            visibility 0.3s ease;
+    }
+
+    .mobile-sidebar-overlay.show {
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
+    }
+
+    /* =====================================
+       SIDEBAR PANEL
+    ===================================== */
+
+    .mobile-sidebar {
+        display: flex;
+        flex-direction: column;
+
+        position: fixed;
+        top: 0;
+        left: 0;
+
+        width: min(82vw, 320px);
+        height: 100vh;
+        height: 100dvh;
+
+        box-sizing: border-box;
+
+        padding:
+            20px
+            18px
+            calc(20px + env(safe-area-inset-bottom));
+
+        background: #ffffff;
+        color: #2d3436;
+
+        box-shadow: 10px 0 40px rgba(0, 0, 0, 0.15);
+
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+
+        /* Initially outside the screen */
+        transform: translateX(-105%);
+
+        visibility: hidden;
+        pointer-events: none;
+
+        z-index: 9999;
+
+        transition:
+            transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+            visibility 0.35s ease;
+    }
+
+    /* Slide in from left to right */
+    .mobile-sidebar.open {
+        transform: translateX(0);
+
+        visibility: visible;
+        pointer-events: auto;
+    }
+
+    /* =====================================
+       SIDEBAR HEADER
+    ===================================== */
+
+    .mobile-sidebar-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+
+        gap: 10px;
+        margin-bottom: 25px;
+    }
+
+    .mobile-sidebar-logo {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+
+        font-size: 1.2rem;
+        color: #6C63FF;
+    }
+
+    .mobile-sidebar-logo span {
+        font-size: 1.6rem;
+    }
+
+    .mobile-sidebar-close {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
+        width: 38px;
+        height: 38px;
+        flex-shrink: 0;
+
+        border: none;
+        border-radius: 10px;
+
+        background: #f1f1f5;
+        color: #333;
+
+        font-size: 1.1rem;
+        cursor: pointer;
+
+        transition:
+            background 0.2s ease,
+            transform 0.2s ease;
+    }
+
+    .mobile-sidebar-close:hover {
+        background: #e5e5ed;
+        transform: rotate(90deg);
+    }
+
+    /* =====================================
+       USER PROFILE
+    ===================================== */
+
+    .mobile-sidebar-user {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+
+        padding: 15px;
+
+        background: #f5f4ff;
+        border-radius: 16px;
+    }
+
+    .mobile-sidebar-user .user-avatar {
+        width: 45px;
+        height: 45px;
+        flex-shrink: 0;
+    }
+
+    .mobile-sidebar-user-info {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .mobile-sidebar-user-info strong {
+        font-size: 0.95rem;
+        color: #2d3436;
+    }
+
+    .mobile-sidebar-user-info span {
+        font-size: 0.8rem;
+        color: #777;
+    }
+
+    /* =====================================
+       USER STATS
+    ===================================== */
+
+    .mobile-sidebar-stats {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+
+        gap: 10px;
+        margin-top: 15px;
+    }
+
+    .mobile-sidebar-stats div {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
+        gap: 7px;
+
+        padding: 12px 5px;
+
+        background: #f8f8fb;
+        border: 1px solid #ededf3;
+        border-radius: 12px;
+
+        font-size: 0.8rem;
+    }
+
+    .mobile-sidebar-stats strong {
+        font-size: 0.8rem;
+        overflow-wrap: anywhere;
+    }
+
+    .mobile-sidebar-divider {
+        width: 100%;
+        height: 1px;
+
+        background: #e8e8ee;
+
+        margin: 20px 0;
+        flex-shrink: 0;
+    }
+
+    /* =====================================
+       SIDEBAR NAVIGATION
+    ===================================== */
+
+    .mobile-sidebar-nav {
+        display: flex;
+        flex-direction: column;
+
+        gap: 7px;
+        width: 100%;
+    }
+
+    .mobile-sidebar-label {
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 1.5px;
+
+        color: #999;
+
+        margin: 0 0 8px 12px;
+    }
+
+    .mobile-sidebar-link {
+        display: flex;
+        align-items: center;
+
+        gap: 13px;
+
+        position: relative;
+
+        width: 100%;
+        min-height: 48px;
+
+        padding: 12px 14px;
+        box-sizing: border-box;
+
+        border: none;
+        border-radius: 12px;
+
+        background: transparent;
+        color: #555;
+
+        font-family: inherit;
+        font-size: 0.92rem;
+        font-weight: 600;
+
+        text-align: left;
+        cursor: pointer;
+
+        transition:
+            background 0.2s ease,
+            color 0.2s ease,
+            transform 0.15s ease;
+    }
+
+    .sidebar-link-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
+        width: 25px;
+        height: 25px;
+        flex-shrink: 0;
+
+        font-size: 1.15rem;
+    }
+
+    .mobile-sidebar-link:hover {
+        background: #f5f4ff;
+        color: #6C63FF;
+    }
+
+    .mobile-sidebar-link:active {
+        transform: scale(0.97);
+    }
+
+    /* Active section */
+    .mobile-sidebar-link.active {
+        background: #6C63FF;
+        color: white;
+
+        box-shadow: 0 4px 12px rgba(108, 99, 255, 0.2);
+    }
+
+    .sidebar-active-indicator {
+        margin-left: auto;
+        font-size: 0.6rem;
+    }
+
+    /* =====================================
+       SIDEBAR FOOTER
+    ===================================== */
+
+    .mobile-sidebar-footer {
+        display: flex;
+        flex-direction: column;
+
+        gap: 8px;
+
+        margin-top: auto;
+        padding-top: 25px;
+    }
+
+    .mobile-sidebar-link.logout {
+        color: #e53935;
+        background: #fff4f4;
+    }
+
+    .mobile-sidebar-link.logout:hover {
+        background: #ffe5e5;
+    }
+
+    /* Keep dropdown above the overlay */
+    .header .user-dropdown {
+        z-index: 10002;
+    }
+}
+
+/* =========================================
+   SMALL PHONES
+========================================= */
+
+@media (max-width: 350px) {
+    .mobile-sidebar {
+        width: 88vw;
+        padding-left: 14px;
+        padding-right: 14px;
+    }
+
+    .header .logo h1 {
+        font-size: 1rem;
+    }
+}
