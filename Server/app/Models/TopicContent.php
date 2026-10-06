@@ -21,10 +21,6 @@ class TopicContent extends Model
         'topic_id' => 'integer',
     ];
 
-    // ============================================================
-    // TOPIC
-    // ============================================================
-
     public function topic(): BelongsTo
     {
         return $this->belongsTo(
