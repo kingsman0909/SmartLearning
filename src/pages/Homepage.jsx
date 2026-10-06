@@ -3313,6 +3313,7 @@ const Homepage = () => {
             lessons={
               lessons
             }
+            apiFetch={apiFetch}
 
             showToast={
               showToast

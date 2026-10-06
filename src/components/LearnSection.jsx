@@ -1,14 +1,30 @@
 import React, { useState } from "react";
+import ReactMarkdown from "react-markdown";
+
 import "../styles/homepage.css";
 
 const LearnSection = ({
   lessons = [],
+  apiFetch,
   showToast,
 }) => {
   const [selectedLesson, setSelectedLesson] =
     useState(null);
 
-  const getLessonTitle = (lesson, index) => {
+  const [selectedTopic, setSelectedTopic] =
+    useState(null);
+
+  const [loadingTopic, setLoadingTopic] =
+    useState(false);
+
+  // ============================================================
+  // HELPERS
+  // ============================================================
+
+  const getLessonTitle = (
+    lesson,
+    index
+  ) => {
     return (
       lesson?.title ??
       lesson?.name ??
@@ -16,53 +32,273 @@ const LearnSection = ({
     );
   };
 
-  const getLessonTopics = (lesson) => {
-    // Supports:
-    // lesson.topics
-    // lesson.topic
-    // lesson.lesson_topics
-
-    if (Array.isArray(lesson?.topics)) {
+  const getLessonTopics = (
+    lesson
+  ) => {
+    if (
+      Array.isArray(
+        lesson?.topics
+      )
+    ) {
       return lesson.topics;
     }
 
-    if (Array.isArray(lesson?.lesson_topics)) {
+    if (
+      Array.isArray(
+        lesson?.lesson_topics
+      )
+    ) {
       return lesson.lesson_topics;
     }
 
-    if (Array.isArray(lesson?.topic)) {
+    if (
+      Array.isArray(
+        lesson?.topic
+      )
+    ) {
       return lesson.topic;
     }
 
     return [];
   };
 
-  const openLesson = (lesson, index) => {
+  // ============================================================
+  // OPEN LESSON
+  // ============================================================
+
+  const openLesson = (
+    lesson,
+    index
+  ) => {
     setSelectedLesson({
       ...lesson,
-      displayTitle: getLessonTitle(
-        lesson,
-        index
-      ),
-      topics: getLessonTopics(lesson),
+
+      displayTitle:
+        getLessonTitle(
+          lesson,
+          index
+        ),
+
+      topics:
+        getLessonTopics(
+          lesson
+        ),
     });
   };
 
+  // ============================================================
+  // CLOSE LESSON
+  // ============================================================
+
   const closeLesson = () => {
-    setSelectedLesson(null);
+    setSelectedLesson(
+      null
+    );
   };
+
+  // ============================================================
+  // OPEN TOPIC
+  // ============================================================
+
+  const openTopic = async (
+    topic,
+    topicIndex
+  ) => {
+    if (!topic?.id) {
+      console.error(
+        "Topic ID is missing:",
+        topic
+      );
+
+      showToast?.(
+        "Unable to open topic. Topic ID is missing.",
+        "error"
+      );
+
+      return;
+    }
+
+    if (
+      typeof apiFetch !==
+      "function"
+    ) {
+      console.error(
+        "apiFetch was not provided to LearnSection."
+      );
+
+      showToast?.(
+        "API connection is not configured.",
+        "error"
+      );
+
+      return;
+    }
+
+    try {
+      setLoadingTopic(
+        true
+      );
+
+      const response =
+        await apiFetch(
+          `/topics/${topic.id}`
+        );
+
+      console.log(
+        "[LEARN] Topic response:",
+        response
+      );
+
+      const topicData =
+        response?.data ??
+        response;
+
+      if (
+        !topicData ||
+        typeof topicData !==
+          "object"
+      ) {
+        throw new Error(
+          "Invalid topic response."
+        );
+      }
+
+      setSelectedTopic({
+        ...topicData,
+
+        displayTitle:
+          topicData?.name ??
+          topicData?.title ??
+          `Topic ${
+            topicIndex + 1
+          }`,
+      });
+
+    } catch (error) {
+      console.error(
+        "[LEARN] Failed to load topic:",
+        error
+      );
+
+      showToast?.(
+        error?.message ||
+          "Failed to load topic content.",
+        "error"
+      );
+    } finally {
+      setLoadingTopic(
+        false
+      );
+    }
+  };
+
+  // ============================================================
+  // CLOSE TOPIC
+  // ============================================================
+
+  const closeTopic = () => {
+    setSelectedTopic(
+      null
+    );
+  };
+
+  // ============================================================
+  // BACK TO TOPICS
+  // ============================================================
+
+  const backToTopics = () => {
+    setSelectedTopic(
+      null
+    );
+  };
+
+  // ============================================================
+  // GET TOPIC CONTENT
+  // ============================================================
+
+  const getTopicContent = (
+    topic
+  ) => {
+    /*
+     * Expected:
+     *
+     * topic.content.content
+     *
+     * Example:
+     *
+     * {
+     *   content: {
+     *      id: 1,
+     *      topic_id: 1,
+     *      content: "# Probability..."
+     *   }
+     * }
+     */
+
+    if (
+      typeof topic?.content
+        ?.content === "string"
+    ) {
+      return topic.content.content;
+    }
+
+    /*
+     * Fallback in case backend
+     * directly returns content.
+     */
+
+    if (
+      typeof topic?.content ===
+      "string"
+    ) {
+      return topic.content;
+    }
+
+    return "";
+  };
+
+  // ============================================================
+  // RENDER
+  // ============================================================
 
   return (
     <section className="section active">
 
-      <h2 className="section-title">
-        📚 Learning Lessons
-      </h2>
+      {/* ======================================================
+          PAGE HEADER
+      ====================================================== */}
+
+      <div className="learn-page-header">
+
+        <div>
+          <span className="learn-page-label">
+            📚 Learning Center
+          </span>
+
+          <h2 className="section-title">
+            Learn
+          </h2>
+
+          <p className="learn-page-description">
+            Study the concepts first,
+            then test what you learned
+            through the practice labs.
+          </p>
+        </div>
+
+      </div>
+
+
+      {/* ======================================================
+          LESSON LIST
+      ====================================================== */}
 
       <div className="content-grid">
 
         {lessons.length === 0 ? (
+
           <div className="empty-learning-state">
+
             <div className="empty-learning-icon">
               📚
             </div>
@@ -72,96 +308,116 @@ const LearnSection = ({
             </h3>
 
             <p>
-              Your professor hasn't assigned
-              any lessons to you yet.
+              Your professor hasn't
+              assigned any lessons to
+              you yet.
             </p>
+
           </div>
+
         ) : (
-          lessons.map((lesson, index) => {
 
-            const title =
-              getLessonTitle(
-                lesson,
-                index
-              );
+          lessons.map(
+            (
+              lesson,
+              index
+            ) => {
 
-            const lessonTopics =
-              getLessonTopics(
-                lesson
-              );
+              const title =
+                getLessonTitle(
+                  lesson,
+                  index
+                );
 
-            return (
-              <div
-                className="content-card lesson-card"
-                key={
-                  lesson?.id ??
-                  `lesson-${index}`
-                }
-                onClick={() =>
-                  openLesson(
-                    lesson,
-                    index
-                  )
-                }
-              >
+              const lessonTopics =
+                getLessonTopics(
+                  lesson
+                );
 
-                <div className="lesson-card-icon">
-                  📖
-                </div>
+              return (
 
-                <div className="lesson-card-content">
+                <button
+                  type="button"
+                  className="content-card lesson-card"
+                  key={
+                    lesson?.id ??
+                    `lesson-${index}`
+                  }
+                  onClick={() =>
+                    openLesson(
+                      lesson,
+                      index
+                    )
+                  }
+                >
 
-                  <span className="lesson-number">
-                    Lesson {index + 1}
-                  </span>
+                  <div className="lesson-card-icon">
+                    📖
+                  </div>
 
-                  <h3>
-                    {title}
-                  </h3>
+                  <div className="lesson-card-content">
 
-                  <p>
-                    {lesson?.description ??
-                      lesson?.desc ??
-                      "Explore this lesson."}
-                  </p>
-
-                  <div className="lesson-card-footer">
-
-                    <span>
-                      📌{" "}
-                      {lessonTopics.length}{" "}
-                      {lessonTopics.length === 1
-                        ? "topic"
-                        : "topics"}
+                    <span className="lesson-number">
+                      Lesson{" "}
+                      {index + 1}
                     </span>
 
-                    <span className="lesson-view">
-                      View →
-                    </span>
+                    <h3>
+                      {title}
+                    </h3>
+
+                    <p>
+                      {lesson?.description ??
+                        lesson?.desc ??
+                        "Explore this lesson."}
+                    </p>
+
+                    <div className="lesson-card-footer">
+
+                      <span>
+                        📌{" "}
+                        {
+                          lessonTopics.length
+                        }{" "}
+                        {lessonTopics.length ===
+                        1
+                          ? "topic"
+                          : "topics"}
+                      </span>
+
+                      <span className="lesson-view">
+                        View →
+                      </span>
+
+                    </div>
 
                   </div>
 
-                </div>
+                </button>
+              );
+            }
+          )
 
-              </div>
-            );
-          })
         )}
 
       </div>
 
-      {/* ==================================================
+
+      {/* ======================================================
           LESSON MODAL
-      ================================================== */}
+      ====================================================== */}
 
       {selectedLesson && (
+
         <div
-          className="lesson-modal-overlay"
-          onClick={closeLesson}
+          className="learn-modal-overlay"
+          onClick={
+            closeLesson
+          }
         >
 
           <div
-            className="lesson-modal"
+            className="learn-modal lesson-modal"
             onClick={(event) =>
               event.stopPropagation()
             }
@@ -169,15 +425,18 @@ const LearnSection = ({
 
             {/* HEADER */}
 
-            <div className="lesson-modal-header">
+            <div className="learn-modal-header">
 
-              <div>
-                <span className="lesson-modal-label">
+              <div className="learn-modal-header-info">
+
+                <span className="learn-modal-label">
                   📚 Learning Lesson
                 </span>
 
                 <h2>
-                  {selectedLesson.displayTitle}
+                  {
+                    selectedLesson.displayTitle
+                  }
                 </h2>
 
                 {selectedLesson.description && (
@@ -187,47 +446,67 @@ const LearnSection = ({
                     }
                   </p>
                 )}
+
               </div>
 
               <button
-                className="lesson-modal-close"
-                onClick={closeLesson}
+                type="button"
+                className="learn-modal-close"
+                onClick={
+                  closeLesson
+                }
                 aria-label="Close lesson"
               >
-                ✕
+                ×
               </button>
 
             </div>
 
-            {/* TOPICS */}
 
-            <div className="lesson-modal-body">
+            {/* BODY */}
 
-              <div className="lesson-topics-header">
+            <div className="learn-modal-body">
 
-                <h3>
-                  📌 Topics
-                </h3>
+              <div className="learn-topics-heading">
 
-                <span>
+                <div>
+
+                  <span>
+                    LESSON CONTENT
+                  </span>
+
+                  <h3>
+                    📌 Topics
+                  </h3>
+
+                </div>
+
+                <span className="learn-topic-count">
                   {
-                    selectedLesson.topics
+                    selectedLesson
+                      .topics
                       .length
                   }{" "}
-                  {selectedLesson.topics
-                    .length === 1
-                    ? "topic"
-                    : "topics"}
+                  {
+                    selectedLesson
+                      .topics
+                      .length ===
+                    1
+                      ? "topic"
+                      : "topics"
+                  }
                 </span>
 
               </div>
 
+
               {selectedLesson.topics
-                .length === 0 ? (
+                .length ===
+              0 ? (
 
                 <div className="lesson-no-topics">
 
-                  <div>
+                  <div className="lesson-no-topics-icon">
                     📝
                   </div>
 
@@ -236,9 +515,9 @@ const LearnSection = ({
                   </h3>
 
                   <p>
-                    There are currently no
-                    topics added to this
-                    lesson.
+                    There are currently
+                    no topics added to
+                    this lesson.
                   </p>
 
                 </div>
@@ -248,13 +527,17 @@ const LearnSection = ({
                 <div className="lesson-topics-list">
 
                   {selectedLesson.topics.map(
-                    (topic, topicIndex) => {
+                    (
+                      topic,
+                      topicIndex
+                    ) => {
 
                       const topicTitle =
                         topic?.title ??
                         topic?.name ??
                         `Topic ${
-                          topicIndex + 1
+                          topicIndex +
+                          1
                         }`;
 
                       const topicDescription =
@@ -263,22 +546,43 @@ const LearnSection = ({
                         "";
 
                       return (
-                        <div
+
+                        <button
+                          type="button"
                           className="lesson-topic-item"
                           key={
                             topic?.id ??
                             `topic-${topicIndex}`
                           }
+                          onClick={() =>
+                            openTopic(
+                              topic,
+                              topicIndex
+                            )
+                          }
                         >
 
                           <div className="topic-number">
-                            {topicIndex + 1}
+                            {
+                              topicIndex +
+                              1
+                            }
                           </div>
 
                           <div className="topic-content">
 
+                            <span className="topic-small-label">
+                              TOPIC{" "}
+                              {
+                                topicIndex +
+                                1
+                              }
+                            </span>
+
                             <h4>
-                              {topicTitle}
+                              {
+                                topicTitle
+                              }
                             </h4>
 
                             {topicDescription && (
@@ -289,19 +593,14 @@ const LearnSection = ({
                               </p>
                             )}
 
-                            {topic?.difficulty && (
-                              <span
-                                className={`difficulty-tag ${topic.difficulty}`}
-                              >
-                                {
-                                  topic.difficulty
-                                }
-                              </span>
-                            )}
-
                           </div>
 
-                        </div>
+                          <div className="topic-open-button">
+                            →
+                          </div>
+
+                        </button>
+
                       );
                     }
                   )}
@@ -312,15 +611,178 @@ const LearnSection = ({
 
             </div>
 
+
             {/* FOOTER */}
 
-            <div className="lesson-modal-footer">
+            <div className="learn-modal-footer">
 
               <button
-                className="lesson-modal-done"
-                onClick={closeLesson}
+                type="button"
+                className="learn-modal-secondary-button"
+                onClick={
+                  closeLesson
+                }
               >
-                Close Lesson
+                Close
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+      )}
+
+
+      {/* ======================================================
+          TOPIC CONTENT MODAL
+      ====================================================== */}
+
+      {selectedTopic && (
+
+        <div
+          className="learn-modal-overlay topic-content-overlay"
+          onClick={
+            closeTopic
+          }
+        >
+
+          <div
+            className="learn-modal topic-content-modal"
+            onClick={(event) =>
+              event.stopPropagation()
+            }
+          >
+
+            {/* HEADER */}
+
+            <div className="learn-modal-header">
+
+              <div className="learn-modal-header-info">
+
+                <span className="learn-modal-label">
+                  📖 Topic Lesson
+                </span>
+
+                <h2>
+                  {
+                    selectedTopic.displayTitle
+                  }
+                </h2>
+
+                {selectedTopic.description && (
+                  <p>
+                    {
+                      selectedTopic.description
+                    }
+                  </p>
+                )}
+
+              </div>
+
+              <button
+                type="button"
+                className="learn-modal-close"
+                onClick={
+                  closeTopic
+                }
+                aria-label="Close topic"
+              >
+                ×
+              </button>
+
+            </div>
+
+
+            {/* TOPIC BODY */}
+
+            <div className="learn-modal-body topic-content-body">
+
+              {loadingTopic ? (
+
+                <div className="topic-loading">
+
+                  <div className="topic-loading-spinner">
+                  </div>
+
+                  <h3>
+                    Loading topic...
+                  </h3>
+
+                  <p>
+                    Getting your learning
+                    material.
+                  </p>
+
+                </div>
+
+              ) : (
+
+                <div className="topic-markdown-content">
+
+                  {getTopicContent(
+                    selectedTopic
+                  ) ? (
+
+                    <ReactMarkdown>
+                      {
+                        getTopicContent(
+                          selectedTopic
+                        )
+                      }
+                    </ReactMarkdown>
+
+                  ) : (
+
+                    <div className="topic-no-content">
+
+                      <div className="topic-no-content-icon">
+                        📝
+                      </div>
+
+                      <h3>
+                        No content available
+                      </h3>
+
+                      <p>
+                        This topic does not
+                        have learning content
+                        yet.
+                      </p>
+
+                    </div>
+
+                  )}
+
+                </div>
+
+              )}
+
+            </div>
+
+
+            {/* FOOTER */}
+
+            <div className="learn-modal-footer">
+
+              <button
+                type="button"
+                className="learn-modal-secondary-button"
+                onClick={
+                  backToTopics
+                }
+              >
+                ← Back to Topics
+              </button>
+
+              <button
+                type="button"
+                className="learn-modal-primary-button"
+                onClick={
+                  closeTopic
+                }
+              >
+                Done
               </button>
 
             </div>
@@ -335,3 +797,4 @@ const LearnSection = ({
 };
 
 export default LearnSection;
+
