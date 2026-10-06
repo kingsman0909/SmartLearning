@@ -28,7 +28,7 @@
         /* ========== HEADER ========== */
         .header {
             position: relative;
-            background: white;
+            background: rgba(0, 0, 0, 0.1);
             padding: 20px 30px;
             border-radius: 16px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
@@ -57,7 +57,7 @@
 
         .logo h1 {
             font-size: 1.8rem;
-            background: linear-gradient(135deg, #6C63FF, #FF6584);
+            background:  #1a78f3;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
@@ -248,17 +248,17 @@
             background: white;
             padding: 25px;
             border-radius: 16px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            box-shadow: 0 5px 20px rgba(0,0,0,0.2);
             cursor: pointer;
             transition: all 0.3s;
-            border-left: 5px solid #6C63FF;
             position: relative;
             overflow: hidden;
         }
 
         .assessment-card:hover {
             transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+            box-shadow: 0 0 10px rgba(0,0,0,1);
+            border: 1px solid rgb(187, 185, 185);
         }
 
         .assessment-card .card-header {
@@ -1405,6 +1405,8 @@
     align-items: center;
     margin-left: auto;
     z-index: 100;
+
+
 }
 
 /* Main profile button */
@@ -1441,7 +1443,7 @@
     height: 42px;
     min-width: 42px;
     border-radius: 50%;
-    background: linear-gradient(135deg, #6C63FF, #FF6584);
+    background: #6C63FF;
     color: white;
     display: flex;
     align-items: center;
@@ -1583,7 +1585,7 @@
     height: 48px;
     min-width: 48px;
     border-radius: 50%;
-    background: linear-gradient(135deg, #6C63FF, #FF6584);
+    background: #6C63FF;
     color: white;
     display: flex;
     align-items: center;
@@ -2344,7 +2346,6 @@
 }
 
 .performance-card:hover {
-    transform: translateY(-4px);
     box-shadow: 0 10px 25px rgba(108, 99, 255, 0.15);
     border-color: rgba(108, 99, 255, 0.2);
 }
@@ -2372,9 +2373,7 @@
     transition: transform 0.3s ease;
 }
 
-.performance-card:hover .performance-icon {
-    transform: scale(1.08) rotate(-3deg);
-}
+
 
 /* Text Container */
 .performance-card > div:last-child {
@@ -2405,19 +2404,19 @@
    ================================================== */
 
 .performance-card:nth-child(1) {
-    border-left: 4px solid #6C63FF;
+    border: 1px solid #6C63FF;
 }
 
 .performance-card:nth-child(2) {
-    border-left: 4px solid #4CAF50;
+    border: 1px solid #4CAF50;
 }
 
 .performance-card:nth-child(3) {
-    border-left: 4px solid #F44336;
+    border: 1px solid #F44336;
 }
 
 .performance-card:nth-child(4) {
-    border-left: 4px solid #2196F3;
+    border: 1px solid #2196F3;
 }
 
 /* ==================================================
@@ -4052,13 +4051,14 @@
         top: 0;
         z-index: 1000;
         border-radius: 0;
-
+        background: rgba(0, 0, 0, 0.1);
         display: flex;
         flex-direction: row;
         align-items: center;
         justify-content: flex-start;
 
-        background: rgba(243, 243, 243, 0.7);
+        
+            
         backdrop-filter: blur(6px);
         border-radius: 6px;
 

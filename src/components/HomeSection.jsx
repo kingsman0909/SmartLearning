@@ -23,7 +23,7 @@ const HomeSection = ({
         <div className="welcome-text">
 
           <span className="welcome-label">
-            👋 Welcome back!
+            Welcome back!
           </span>
 
           <h2>
@@ -49,7 +49,7 @@ const HomeSection = ({
             <div>
 
               <strong>
-                ⭐ {userStats.level} <span>
+                {userStats.level} <span>
                 - {userStats.score} points
               </span>
               </strong>
@@ -87,7 +87,7 @@ const HomeSection = ({
 
           <StatCard
             value={stats.lessons}
-            label="📚 Topics"
+            label=" Topics"
             onClick={() =>
               navigateTo("learn")
             }
@@ -95,7 +95,7 @@ const HomeSection = ({
 
           <StatCard
             value={stats.problems}
-            label="💡 Practice Problems"
+            label=" Practice Problems"
             onClick={() =>
               navigateTo("practice")
             }
@@ -103,7 +103,7 @@ const HomeSection = ({
 
           <StatCard
             value={stats.flashcards}
-            label="🃏 Flash Cards"
+            label=" Flash Cards"
             onClick={() =>
               navigateTo("flashcards")
             }
@@ -111,7 +111,7 @@ const HomeSection = ({
 
           <StatCard
             value={stats.assessments}
-            label="📝 Assessments"
+            label=" Assessments"
             onClick={() =>
               navigateTo("assessments")
             }

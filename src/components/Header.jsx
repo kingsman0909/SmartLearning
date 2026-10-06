@@ -17,11 +17,11 @@ const Header = ({
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const navigation = [
-    ["home", "🏠", "Home"],
-    ["learn", "📚", "Learn"], //removed ["generate-lesson", "✨", "Generate Lesson"], this is for updated version later
-    ["practice", "✏️", "Practice"],
-    ["flashcards", "🃏", "Flash Cards"],
-    ["assessments", "📝", "Assessments"],
+    ["home",  "Home"],
+    ["learn",  "Learn"], //removed ["generate-lesson", "✨", "Generate Lesson"], this is for updated version later
+    ["practice", "Practice"],
+    ["flashcards", "Flash Cards"],
+    ["assessments", "Assessments"],
   ];
 
   const handleNavigation = (section) => {
@@ -55,11 +55,11 @@ const Header = ({
         {/* HEADER STATS */}
         <div className="header-stats">
           <span className="level-badge">
-            ⭐ {userStats.level || "Level 1"}
+             {userStats.level || "Level 1"}
           </span>
 
           <span className="score-display">
-            🏆 {userStats.score ?? 0} pts
+             {userStats.score ?? 0} pts
           </span>
         </div>
 
