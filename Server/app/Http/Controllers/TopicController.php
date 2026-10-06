@@ -1,4 +1,3 @@
-
 <?php
 
 namespace App\Http\Controllers;
@@ -11,7 +10,7 @@ class TopicController extends Controller
     /**
      * Get all topics.
      *
-     * Does NOT load the large topic content.
+     * Does not load the large topic content.
      */
     public function index(): JsonResponse
     {
